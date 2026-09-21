@@ -1,0 +1,23 @@
+package-as: MonkeDo
+
+# The addon lives in addon/MonkeDo. The packager reads its TOC through this move.
+move-folders:
+  MonkeDo/addon/MonkeDo: MonkeDo
+
+externals:
+  addon/MonkeDo/Libs/LibStub: https://repos.wowace.com/wow/libstub/trunk
+  addon/MonkeDo/Libs/CallbackHandler-1.0: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0
+  addon/MonkeDo/Libs/LibDataBroker-1.1: https://github.com/tekkub/libdatabroker-1-1
+  addon/MonkeDo/Libs/LibDBIcon-1.0: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
+
+# Everything that is not the addon. Dotfiles are ignored by the packager already.
+ignore:
+  - pipeline
+  - tests
+  - docs
+  - art
+  - tools
+  - pyproject.toml
+  - uv.lock
+  - README.md
+  - addon/MonkeDo/Media/README.md

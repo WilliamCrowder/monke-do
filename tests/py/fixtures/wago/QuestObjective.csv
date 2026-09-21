@@ -1,0 +1,8 @@
+ID,Description_lang,Type,Amount,ObjectID,OrderIndex,Flags,StorageIndex,QuestID
+5003,"Bog Iron, smelted",1,4,9402,1,0,1,95001
+5002,Gray Wolf slain,0,8,9201,0,0,0,95001
+5004,Secret tally,0,1,9299,2,8,2,95001
+5005,Speak with Warden Halla,3,1,9101,3,2,3,95001
+5010,,6,3000,59,0,0,0,95002
+5011,Fill the bar,15,100,0,1,0,1,95002
+5012,Something from the future,99,2,0,2,0,2,95002

@@ -1,0 +1,28 @@
+## Interface: 16001
+## Title: Monke Do
+## Notes: Quest text for smooth brains. Short lore, a caveman task list, and one click back to the real text.
+## Author: Will
+## Version: @project-version@
+## Category: Quests
+## IconTexture: Interface\AddOns\MonkeDo\Media\icon.png
+## SavedVariables: MonkeDoDB
+## OptionalDeps: LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0
+## AddonCompartmentFunc: MonkeDo_OnAddonCompartmentClick
+## X-License: GPL-3.0-or-later
+## X-Curse-Project-ID:
+## X-Wago-ID:
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
+Data\MonkeDB.lua
+Data\MonkeDB_Meta.lua
+
+Voice.lua
+Rules.lua
+Compose.lua
+Core.lua
+Display.lua
+Tracker.lua

@@ -1,0 +1,7 @@
+{
+  "wow": [{"version": "12.0.1.70001", "created_at": "2026-09-01 10:00:00", "is_active": true}],
+  "wow_classic_era": [
+    {"version": "1.15.8.63829", "created_at": "2026-08-20 10:00:00", "is_active": true},
+    {"version": "1.15.7.61582", "created_at": "2026-05-02 10:00:00", "is_active": false}
+  ]
+}

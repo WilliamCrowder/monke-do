@@ -1,0 +1,41 @@
+name: Missing or wrong quest
+description: A quest shows "Lore not yet translated", or its Monke Do text is wrong.
+title: "Quest <ID>: "
+labels: ["quest-data"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Monke Do collects nothing from your game, so we only know about a quest when a public
+        site lists it or someone reports it here. The quest ID is the number in the quest's
+        Wowhead URL, or what `/dump GetQuestID()` prints while the quest window is open.
+  - type: input
+    id: quest_id
+    attributes:
+      label: Quest ID
+      placeholder: "214"
+    validations:
+      required: true
+  - type: input
+    id: quest_name
+    attributes:
+      label: Quest name
+    validations:
+      required: true
+  - type: dropdown
+    id: problem
+    attributes:
+      label: What is wrong?
+      options:
+        - No lore ("Lore not yet translated")
+        - Wrong count or wrong target in a task
+        - Lore says something the quest does not
+        - Tone problem
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What Monke Do showed and what you expected. Please do not paste the full quest text.

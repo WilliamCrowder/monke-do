@@ -1,0 +1,15 @@
+# pipeline state and raw pulls
+pipeline/db.sqlite
+pipeline/db.sqlite-*
+pipeline/sources/raw/
+pipeline/llm/cache/
+pipeline/out/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# packager output
+.release/
+# libs come from .pkgmeta externals
+addon/MonkeDo/Libs/*
+!addon/MonkeDo/Libs/.gitkeep

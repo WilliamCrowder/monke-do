@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.1"
+      - uses: leafo/gh-actions-luarocks@v4
+      - name: Install luacheck and busted
+        run: |
+          luarocks install luacheck
+          luarocks install busted
+      - name: Lint (fails on undefined globals)
+        run: luacheck addon tests/lua
+      - name: Unit tests with WoW API stubs
+        run: busted
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      # Web fetchers live behind --sources and are never invoked here.
+      - name: Pipeline tests (also runs the Lua specs through lupa)
+        run: uv run pytest
+
+  package-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Packager dry run (release.sh -d)
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -d
