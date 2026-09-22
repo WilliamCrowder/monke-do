@@ -71,6 +71,10 @@ def build_record(quest: sqlite3.Row, objectives: list, summary: dict | None) -> 
     they say something the addon cannot say by itself: with no structured objectives and
     no turn-in NPC the only bullet would be the generic turn-in line, which the addon
     already appends when a quest has no record.
+
+    `tp` holds the plain-voice objective bullets, one per structured objective, from the
+    same templates as the addon's Rules.lua. Plain voice needs them only before a quest is
+    accepted, when the game has no live objectives to build bullets from.
     """
     k = len(objectives)
     npc = quest["turnin_npc"]
@@ -85,6 +89,8 @@ def build_record(quest: sqlite3.Row, objectives: list, summary: dict | None) -> 
         record["t"] = rules.tasks_for(objectives, npc, rules.MONKE, kind)
     else:
         return None
+    if k:
+        record["tp"] = [rules.task_for(o, rules.PLAIN) for o in objectives]
     record["n"] = k
     record["e"] = npc
     record["d"] = bool(npc) and kind in ("other", "object")
@@ -92,13 +98,16 @@ def build_record(quest: sqlite3.Row, objectives: list, summary: dict | None) -> 
 
 
 def _record_line(quest_id: int, record: dict) -> str:
-    """One line of MonkeDB: fields in contract order l, p, t, n, e, g, v; absent ones omitted."""
+    """One line of MonkeDB: fields in contract order l, p, t, tp, n, e, d, g, v; absent ones
+    omitted."""
     parts = []
     for key in ("l", "p"):
         if record.get(key):
             parts.append(f"{key} = {lua_string(record[key])}")
     if record.get("t"):
         parts.append(f"t = {_lua_list(record['t'])}")
+    if record.get("tp"):
+        parts.append(f"tp = {_lua_list(record['tp'])}")
     if record.get("n"):
         parts.append(f"n = {int(record['n'])}")
     if record.get("e"):

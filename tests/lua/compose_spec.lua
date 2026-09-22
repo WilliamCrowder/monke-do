@@ -3,6 +3,10 @@
 describe("Compose", function()
     local ns, Compose
     local BULLET = "\226\128\162 "
+    local ELLIPSIS = "\226\128\166"
+    local HEADER = "|cffffd100"
+    local GREY = "|cff808080"
+    local HINT = "|cff808080"
 
     -- Quest 214 as the pipeline exports it. PLACEHOLDER WORDING: replace l, p and t with the
     -- text from the pitch (and pin it in pipeline/llm/overrides.jsonl) so this is the golden test.
@@ -49,7 +53,8 @@ describe("Compose", function()
         assert.is_nil(s.lore)
         assert.is_true(s.loreMissing)
         assert.are.same({ "Grab 10 Red Silk Bandana (3/10)", "Go back. Get shiny." }, s.tasks)
-        assert.are.equal("Lore not yet translated.\n\nBlizzard words", Compose.DescriptionText(s, "Blizzard words"))
+        assert.are.equal("Bring me 10 bandanas.\n" .. HINT .. "Long story? Poke Wrinkle.|r",
+            Compose.DescriptionText(s, "A long, long story about bandanas.", "Bring me 10 bandanas."))
     end)
 
     it("uses go-to wording for a delivery quest in plain voice", function()
@@ -185,6 +190,223 @@ describe("Compose", function()
         assert.is_nil(s.lore)
         assert.is_nil(s.loreMissing)
         assert.are.equal("", Compose.DescriptionText(s, "original"))
+        s = Compose.Build({ objectives = LIVE_214, voice = "monke", showLore = false })
+        assert.are.equal("", Compose.DescriptionText(s, "A long story.", "Bring me 10 bandanas."))
+    end)
+
+    describe("with no lore yet", function()
+        local LONG = ("The Defias Brotherhood has plagued Westfall for years. "):rep(6) .. "Bring me their bandanas."
+
+        it("shows Blizzard's objectives sentence and points at the toggle, in each voice", function()
+            local s = Compose.Build({ objectives = LIVE_214, voice = "monke" })
+            assert.are.equal("Bring me 10 bandanas.\n" .. HINT .. "Long story? Poke Wrinkle.|r",
+                Compose.DescriptionText(s, LONG, "Bring me 10 bandanas."))
+            s = Compose.Build({ objectives = LIVE_214, voice = "plain" })
+            assert.are.equal("Bring me 10 bandanas.\n" .. HINT .. "Full text: press Original.|r",
+                Compose.DescriptionText(s, LONG, "Bring me 10 bandanas."))
+        end)
+
+        it("keeps the hint short", function()
+            for _, voice in ipairs({ "monke", "plain" }) do
+                local hint = ns.Voice.Format("toggle_hint", voice, { button = ns.Voice.Get("toggle_to_original", voice) })
+                assert.is_true(#hint > 0 and #hint <= 40, hint)
+            end
+        end)
+
+        it("keeps the group warning first", function()
+            local s = Compose.Build({ objectives = LIVE_214, voice = "monke", groupSize = 3 })
+            assert.are.equal("|cffff2020Bring 2 friends. Big danger.|r\n\nBring me 10 bandanas.\n" ..
+                HINT .. "Long story? Poke Wrinkle.|r", Compose.DescriptionText(s, LONG, "Bring me 10 bandanas."))
+        end)
+
+        it("never shows the whole long description", function()
+            local s = Compose.Build({ objectives = LIVE_214, voice = "monke" })
+            for _, sentence in ipairs({ "Bring me 10 bandanas.", "", "  \n " }) do
+                local text = Compose.DescriptionText(s, LONG, sentence)
+                assert.is_nil(text:find(LONG, 1, true), sentence)
+                assert.is_nil(text:find("Bring me their bandanas", 1, true), sentence)
+            end
+        end)
+
+        it("uses the opening of the description when there is no objectives sentence (talk quests)", function()
+            local s = Compose.Build({ objectives = {}, voice = "monke" })
+            assert.are.equal("The Defias Brotherhood has plagued Westfall for years. " ..
+                "The Defias Brotherhood has plagued Westfall for years.\n" .. HINT .. "Long story? Poke Wrinkle.|r",
+                Compose.DescriptionText(s, LONG, nil))
+            assert.are.equal("The Defias Brotherhood has plagued Westfall for years. " ..
+                "The Defias Brotherhood has plagued Westfall for years.\n" .. HINT .. "Long story? Poke Wrinkle.|r",
+                Compose.DescriptionText(s, LONG, ""))
+        end)
+
+        it("shows a short description whole, with no hint, since the toggle has nothing more", function()
+            local s = Compose.Build({ objectives = {}, voice = "monke" })
+            assert.are.equal("Talk to Gryan.", Compose.DescriptionText(s, "  Talk to\n\nGryan.  ", ""))
+            assert.are.equal("Talk to Gryan.", Compose.DescriptionText(s, "Talk to Gryan.", "Talk to Gryan."))
+        end)
+
+        it("has nothing to say when Blizzard has no text either", function()
+            local s = Compose.Build({ objectives = {}, voice = "monke" })
+            assert.are.equal("", Compose.DescriptionText(s, nil, nil))
+            assert.are.equal("", Compose.DescriptionText(s, "", ""))
+            s = Compose.Build({ objectives = {}, voice = "monke", groupSize = 3 })
+            assert.are.equal("|cffff2020Bring 2 friends. Big danger.|r", Compose.DescriptionText(s, "", ""))
+        end)
+    end)
+
+    describe("Opening", function()
+        it("cuts at the end of the second sentence when both fit", function()
+            assert.are.equal("Greetings, traveller. The Defias have taken the mine.",
+                Compose.Opening("Greetings, traveller. The Defias have taken the mine. Their leader hides inside."))
+        end)
+        it("cuts at the end of the first sentence when the second does not fit", function()
+            local first = "The farmers of Westfall " .. ("flee and "):rep(12) .. "hide." -- 137 characters
+            local text = first .. " " .. ("ogres "):rep(10) .. "everywhere. The end."
+            assert.are.equal(first, Compose.Opening(text))
+        end)
+        it("keeps closing quotes and runs of marks with their sentence", function()
+            assert.are.equal('He said "Go!" Then he left?!', Compose.Opening('He said "Go!" Then he left?! And so on.'))
+        end)
+        it("puts paragraphs on one line", function()
+            assert.are.equal("Hail! The mine is lost.", Compose.Opening("Hail!\n\n  The mine\tis lost.\n"))
+        end)
+        it("cuts at a word boundary with an ellipsis when no sentence ends inside the limit", function()
+            local text = ("bandanas "):rep(30) -- no full stop anywhere
+            local cut = Compose.Opening(text)
+            assert.are.equal(("bandanas "):rep(16) .. "bandanas" .. ELLIPSIS, cut)
+            -- words that end exactly at the limit are kept whole
+            assert.are.equal(("bandana "):rep(19) .. "bandana" .. ELLIPSIS, Compose.Opening(("bandana "):rep(30)))
+        end)
+        it("drops a trailing comma or dash before the ellipsis", function()
+            assert.are.equal("One, two" .. ELLIPSIS, Compose.Opening("One, two, three four five", 12))
+            assert.are.equal("Wait" .. ELLIPSIS, Compose.Opening("Wait - there is more", 9))
+        end)
+        it("is never longer than the limit, counting characters rather than bytes", function()
+            -- 150 two-byte characters and a full stop fit in 160 characters (but not in 160 bytes)
+            local accented = ("\195\169"):rep(150) .. "."
+            assert.are.equal(accented, Compose.Opening(accented .. " Then " .. ("x"):rep(50) .. "."))
+            -- one endless word is cut on a character boundary, never inside one
+            assert.are.equal(("\195\169"):rep(159) .. ELLIPSIS, Compose.Opening(("\195\169"):rep(200)))
+            assert.are.equal(("y"):rep(19) .. ELLIPSIS, Compose.Opening(("y"):rep(30), 20))
+            for _, text in ipairs({ ("word "):rep(80), ("A sentence that goes on. "):rep(20), ("z"):rep(500) }) do
+                local _, chars = Compose.Opening(text):gsub("[^\128-\191]", "")
+                assert.is_true(chars <= 160, text)
+            end
+        end)
+        it("leaves text that fits alone and survives junk", function()
+            assert.are.equal("No full stop here", Compose.Opening("No full stop here"))
+            assert.are.equal("", Compose.Opening(""))
+            assert.are.equal("", Compose.Opening(nil))
+            assert.are.equal("", Compose.Opening(42))
+        end)
+    end)
+
+    describe("plain voice task list before the quest is accepted", function()
+        local RECORD = {
+            l = RECORD_214.l, p = RECORD_214.p, t = RECORD_214.t, tp = { "Collect 10 Red Silk Bandana." },
+            n = 1, e = "Scout Riell", v = 3,
+        }
+
+        it("uses tp[1..n] as they are when the game reports no objectives", function()
+            local s = Compose.Build({ record = RECORD, objectives = {}, voice = "plain", showProgress = true })
+            assert.are.same({ "Collect 10 Red Silk Bandana.", "Return to Scout Riell." }, s.tasks)
+            assert.are.equal(1, s.numObjectiveTasks)
+            s = Compose.Build({ record = RECORD, objectives = nil, voice = "plain" })
+            assert.are.same({ "Collect 10 Red Silk Bandana.", "Return to Scout Riell." }, s.tasks)
+        end)
+
+        it("still builds from the live objectives once the game has them", function()
+            local s = Compose.Build({ record = RECORD, objectives = LIVE_214, voice = "plain", showProgress = true })
+            assert.are.same({ "Collect 10 Red Silk Bandana (3/10)", "Return to Scout Riell." }, s.tasks)
+        end)
+
+        it("ignores a tp shorter than n", function()
+            local record = { t = { "Grab 5 Candle.", "Bonk 8 Kobold.", "Go back." }, tp = { "Collect 5 Candle." }, n = 2, v = 3 }
+            assert.are.same({ "Turn in the quest." }, Compose.Build({ record = record, voice = "plain" }).tasks)
+        end)
+
+        it("ignores a malformed tp and keeps the rest of the record", function()
+            for _, tp in ipairs({ "Collect 10 Red Silk Bandana.", { 42 }, { "ok", false }, 7 }) do
+                local record = { l = "Monke lore.", p = "Plain lore.", t = RECORD_214.t, tp = tp, n = 1, e = "Scout Riell", v = 3 }
+                local usable = Compose.UsableRecord(record)
+                assert.is_not_nil(usable)
+                assert.is_nil(usable.tp)
+                assert.are.equal(tp, record.tp) -- the DB table itself is left alone
+                local s = Compose.Build({ record = record, objectives = {}, voice = "plain" })
+                assert.are.equal("Plain lore.", s.lore)
+                assert.are.same({ "Return to Scout Riell." }, s.tasks)
+                s = Compose.Build({ record = record, objectives = {}, voice = "monke" })
+                assert.are.same({ "Grab 10 Red Silk Bandana.", "Go back to Scout Riell." }, s.tasks)
+            end
+        end)
+
+        it("returns a well-formed record as it is", function()
+            assert.are.equal(RECORD, Compose.UsableRecord(RECORD))
+        end)
+    end)
+
+    describe("log view", function()
+        it("is one list: the header line, then the bullets, and no rewards line", function()
+            local s = Compose.Build({ record = RECORD_214, objectives = LIVE_214, voice = "monke", showProgress = true,
+                rewards = { xp = 875, money = 400 } })
+            assert.are.equal(
+                HEADER .. "Monke do:|r\n" ..
+                BULLET .. "Grab 10 Red Silk Bandana (3/10)\n" ..
+                BULLET .. "Go back to Scout Riell.",
+                Compose.LogObjectivesText(s))
+            s = Compose.Build({ record = RECORD_214, objectives = LIVE_214, voice = "plain", showProgress = true })
+            assert.are.equal(HEADER .. "To do:|r\n" .. BULLET .. "Collect 10 Red Silk Bandana (3/10)\n" ..
+                BULLET .. "Return to Scout Riell.", Compose.LogObjectivesText(s))
+        end)
+
+        it("starts with the game's which-way line when there is one", function()
+            local s = Compose.Build({ record = RECORD_214, objectives = LIVE_214, voice = "monke", showProgress = true,
+                waypoint = " Take the boat to Menethil Harbor " })
+            assert.are.equal("Way: Take the boat to Menethil Harbor.", s.waypoint)
+            assert.are.equal(HEADER .. "Monke do:|r\n" .. BULLET .. "Way: Take the boat to Menethil Harbor.\n" ..
+                BULLET .. "Grab 10 Red Silk Bandana (3/10)\n" .. BULLET .. "Go back to Scout Riell.",
+                Compose.LogObjectivesText(s))
+            assert.are.equal("Next: Take the boat to Menethil Harbor.",
+                Compose.Build({ voice = "plain", waypoint = "Take the boat to Menethil Harbor." }).waypoint)
+            assert.are.equal("Way: Run!", Compose.Build({ voice = "monke", waypoint = "Run!" }).waypoint)
+            assert.is_nil(Compose.Build({ voice = "monke", waypoint = "  " }).waypoint)
+            assert.is_nil(Compose.Build({ voice = "monke", waypoint = 5 }).waypoint)
+        end)
+
+        it("greys objectives the game reports finished, and nothing else", function()
+            local live = {
+                { text = "10/10 Red Silk Bandana", type = "item", finished = true, numFulfilled = 10, numRequired = 10 },
+                { text = "0/1 Defias Letter", type = "item", finished = false, numFulfilled = 0, numRequired = 1 },
+            }
+            local s = Compose.Build({ record = RECORD_214, objectives = live, voice = "monke", showProgress = true })
+            assert.are.same({ [1] = true }, s.finished)
+            assert.are.equal(
+                HEADER .. "Monke do:|r\n" ..
+                GREY .. BULLET .. "Grab 10 Red Silk Bandana (10/10)|r\n" ..
+                BULLET .. "Grab Defias Letter.\n" ..
+                BULLET .. "Go back to Scout Riell.",
+                Compose.LogObjectivesText(s))
+            -- the quest giver page and the progress page grey them too
+            assert.are.equal(GREY .. BULLET .. "Grab 10 Red Silk Bandana (10/10)|r\n" .. BULLET .. "Grab Defias Letter.\n" ..
+                BULLET .. "Go back to Scout Riell.", Compose.ObjectivesText(s))
+            assert.are.equal("Not done. Monke still need:\n\n" .. GREY .. BULLET .. "Grab 10 Red Silk Bandana (10/10)|r\n" ..
+                BULLET .. "Grab Defias Letter.", Compose.ProgressText(s, false))
+            -- not in the log: no progress, nothing finished
+            s = Compose.Build({ record = RECORD_214, objectives = live, voice = "monke", showProgress = false })
+            assert.are.same({}, s.finished)
+        end)
+
+        it("keeps tasks as plain strings for other readers", function()
+            local live = {
+                { text = "10/10 Red Silk Bandana", type = "item", finished = true, numFulfilled = 10, numRequired = 10 },
+            }
+            local s = Compose.Build({ record = RECORD_214, objectives = live, voice = "monke", showProgress = true,
+                waypoint = "Take the boat", groupSize = 3 })
+            for _, task in ipairs(s.tasks) do
+                assert.is_nil(task:find("|", 1, true), task)
+            end
+            assert.is_nil(s.waypoint:find("|", 1, true))
+            assert.are.same({ "Grab 10 Red Silk Bandana (10/10)", "Go back to Scout Riell." }, s.tasks)
+        end)
     end)
 
     describe("group line", function()

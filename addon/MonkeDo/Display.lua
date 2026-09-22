@@ -104,6 +104,18 @@ local function questLogRewards(questID)
     return rewards
 end
 
+-- The "which way" line Blizzard puts at the top of its objective list (a boat, a portal).
+-- MayReturnNothing in Blizzard's documentation.
+local function waypointText(questID)
+    if C_QuestLog and C_QuestLog.GetNextWaypointText then
+        local text = C_QuestLog.GetNextWaypointText(questID)
+        if type(text) == "string" and text ~= "" then
+            return text
+        end
+    end
+    return nil
+end
+
 -- Everything Compose needs for one quest.
 function Display.BuildSections(questID, fromLog)
     local objectives
@@ -121,19 +133,39 @@ function Display.BuildSections(questID, fromLog)
         groupSize = size,
         groupTag = tagged,
         rewards = fromLog and questLogRewards(questID) or questGiverRewards(),
+        waypoint = fromLog and waypointText(questID) or nil,
     })
 end
 
+-- True when Blizzard wrote the fontstring's text after our last swap (or we never swapped
+-- it). GetText() answers nil for an empty string on the real client, so `current` is always
+-- a string ("" for empty) and everything is compared as strings.
+local function isFresh(fontString, current)
+    return fontString.monkeText == nil or current ~= fontString.monkeText
+end
+
+-- Blizzard's text for a fontstring: what it shows now, unless that is our own text, in which
+-- case the string swap() remembered. Safe to call before swap() and on every redraw.
+local function blizzardText(fontString)
+    if not (fontString and fontString.GetText) then
+        return ""
+    end
+    local current = fontString:GetText() or ""
+    if isFresh(fontString, current) then
+        return current
+    end
+    return fontString.monkeOriginal or ""
+end
+
 -- Swap a fontstring's text, remembering Blizzard's string so the toggle can put it back
--- byte for byte without asking the server again.
--- GetText() answers nil for an empty string on the real client, so everything is compared
--- as strings.
+-- byte for byte without asking the server again. newText nil (or the original-text toggle)
+-- puts Blizzard's string back when we had changed it, and otherwise leaves it alone.
 local function swap(fontString, newText)
     if not (fontString and fontString.GetText and fontString.SetText) then
         return
     end
     local current = fontString:GetText() or ""
-    if fontString.monkeText == nil or current ~= fontString.monkeText then
+    if isFresh(fontString, current) then
         fontString.monkeOriginal = current -- Blizzard wrote a fresh string since our last swap
     end
     if ns.state.showOriginal or newText == nil then
@@ -162,6 +194,12 @@ end
 
 -- Runs after every QuestInfo_Display: quest giver detail and reward pages, the map quest
 -- details and the quest log popup all come through here.
+--
+-- Quest giver page: lore in the description slot; "Quest Objectives" relabelled to the tasks
+-- header; bullets and the rewards line in the objectives slot.
+-- Log views (quest log popup, map details; QuestInfoFrame.questLog): the objectives slot is
+-- the one task list, header line first; Blizzard's own objective list under it is emptied
+-- line by line; the lore sits under Blizzard's "Description" header.
 function Display.ApplyQuestInfo()
     if not enabled then
         return
@@ -171,19 +209,48 @@ function Display.ApplyQuestInfo()
         return
     end
     local sections = Display.BuildSections(questID, fromLog)
+    local logView = QuestInfoFrame and QuestInfoFrame.questLog and true or false
 
+    -- Blizzard's objectives sentence stands in for missing lore, so read it before our
+    -- bullets replace it (and from memory once they have).
+    local sentence = ""
+    if shown(QuestInfoObjectivesText) then
+        sentence = blizzardText(QuestInfoObjectivesText)
+    end
     local description = QuestInfoDescriptionText
     if shown(description) then
-        local current = description:GetText() or ""
-        local original = description.monkeOriginal
-        if description.monkeText == nil or current ~= description.monkeText then
-            original = current
-        end
-        swap(description, Compose.DescriptionText(sections, original))
+        swap(description, Compose.DescriptionText(sections, blizzardText(description), sentence))
     end
     if shown(QuestInfoObjectivesText) then
-        swap(QuestInfoObjectivesText, Compose.ObjectivesText(sections))
+        if logView then
+            swap(QuestInfoObjectivesText, Compose.LogObjectivesText(sections))
+        else
+            swap(QuestInfoObjectivesText, Compose.ObjectivesText(sections))
+        end
     end
+
+    -- Blizzard never resets header text, so the header is swapped on every pass: relabelled
+    -- for the quest giver page, put back everywhere else, and no view is left holding ours.
+    local header
+    if not logView then
+        header = Voice.Get("tasks_header", sections.voice)
+    end
+    swap(QuestInfoObjectivesHeader, header)
+
+    -- Blizzard's own objective list repeats ours in the log views. Empty each shown line
+    -- rather than hide it: a hidden line keeps its place, and Blizzard shows the lines again
+    -- on every redraw anyway. Any other view gets them back.
+    local objectivesFrame = QuestInfoObjectivesFrame
+    if objectivesFrame and type(objectivesFrame.Objectives) == "table" then
+        for _, line in ipairs(objectivesFrame.Objectives) do
+            if logView and shown(line) then
+                swap(line, "")
+            else
+                swap(line, nil)
+            end
+        end
+    end
+
     if shown(QuestInfoRewardText) then
         swap(QuestInfoRewardText, Compose.CompleteText(sections))
     end

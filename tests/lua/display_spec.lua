@@ -4,6 +4,11 @@
 describe("Display", function()
     local ns
     local BULLET = "\226\128\162 "
+    local HEADER_MONKE = "|cffffd100Monke do:|r"
+    local HEADER_PLAIN = "|cffffd100To do:|r"
+    local GREY = "|cff808080"
+    local HINT_MONKE = "|cff808080Long story? Poke Wrinkle.|r"
+    local HINT_PLAIN = "|cff808080Full text: press Original.|r"
 
     local RECORD_214 = {
         l = "Bad men wear red hankies. Scout lady want them. Take hankies.",
@@ -42,9 +47,11 @@ describe("Display", function()
         ns.Core.ToggleOriginal()
         assert.are.equal(quest.description, QuestInfoDescriptionText:GetText())
         assert.are.equal(quest.objectivesText, QuestInfoObjectivesText:GetText())
+        assert.are.equal("Quest Objectives", QuestInfoObjectivesHeader:GetText())
 
         ns.Core.ToggleOriginal()
         assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
+        assert.are.equal("Monke do:", QuestInfoObjectivesHeader:GetText())
     end)
 
     it("restores the original even when Monke Do had emptied the description", function()
@@ -84,20 +91,144 @@ describe("Display", function()
         assert.are.equal("Kill things.", QuestInfoObjectivesText:GetText())
     end)
 
-    it("renders rule-based bullets and keeps Blizzard lore for a quest with no DB entry", function()
+    it("puts Blizzard's objectives sentence where the lore goes for a quest with no DB entry", function()
         _G.MonkeDB = {}
         WowStubs.showQuest("detail")
-        assert.are.equal("Lore not yet translated.\n\n" .. WowStubs.quest.description, QuestInfoDescriptionText:GetText())
+        assert.are.equal(WowStubs.quest.objectivesText .. "\n" .. HINT_MONKE, QuestInfoDescriptionText:GetText())
         assert.are.equal(
             BULLET .. "Grab 10 Red Silk Bandana (3/10)\n" .. BULLET .. "Go back. Get shiny.\n\nMonke get: 875 XP, 4s",
             QuestInfoObjectivesText:GetText())
+        ns.Core.Set("voice", "plain")
+        assert.are.equal(WowStubs.quest.objectivesText .. "\n" .. HINT_PLAIN, QuestInfoDescriptionText:GetText())
     end)
 
-    it("does not stack the no-lore notice when the same page refreshes", function()
+    it("does the same in the quest log and map details", function()
         _G.MonkeDB = {}
+        WowStubs.showQuest("log")
+        assert.are.equal(WowStubs.quest.objectivesText .. "\n" .. HINT_MONKE, QuestInfoDescriptionText:GetText())
+        assert.are.equal(HEADER_MONKE .. "\n" .. BULLET .. "Grab 10 Red Silk Bandana (3/10)\n" .. BULLET .. "Go back. Get shiny.",
+            QuestInfoObjectivesText:GetText())
+    end)
+
+    it("never takes its own bullets for Blizzard's sentence on a redraw or a settings change", function()
+        _G.MonkeDB = {}
+        for _, kind in ipairs({ "detail", "log" }) do
+            WowStubs.showQuest(kind)
+            ns.Core.Set("groupWarning", false) -- any setting change redraws from what is on screen
+            assert.are.equal(WowStubs.quest.objectivesText .. "\n" .. HINT_MONKE, QuestInfoDescriptionText:GetText())
+            WowStubs.showQuest(kind) -- Blizzard redraws with fresh strings
+            ns.Core.Set("groupWarning", true)
+            assert.are.equal(WowStubs.quest.objectivesText .. "\n" .. HINT_MONKE, QuestInfoDescriptionText:GetText())
+            ns.Core.ToggleOriginal()
+            assert.are.equal(WowStubs.quest.description, QuestInfoDescriptionText:GetText())
+            assert.are.equal(WowStubs.quest.objectivesText, QuestInfoObjectivesText:GetText())
+            ns.Core.ToggleOriginal()
+        end
+    end)
+
+    it("never shows a long description while Monke text is on", function()
+        _G.MonkeDB = {}
+        local long = ("The Defias Brotherhood has plagued Westfall for years. "):rep(8) .. "Bring me their bandanas."
+        WowStubs.quest.description = long
+        local function check(where)
+            local text = QuestInfoDescriptionText:GetText() or ""
+            assert.is_nil(text:find("Bring me their bandanas", 1, true), where)
+            assert.is_true(#text < 200, where)
+        end
+        for _, kind in ipairs({ "detail", "log" }) do
+            WowStubs.showQuest(kind)
+            check(kind)
+            ns.Core.Set("voice", "plain")
+            check(kind .. " plain")
+            ns.Core.Set("voice", "monke")
+            WowStubs.showQuest(kind)
+            check(kind .. " redraw")
+        end
+        -- A talk quest has no objectives sentence: the first sentence or two of the description.
+        WowStubs.quest.objectivesText = ""
+        for _, kind in ipairs({ "detail", "log" }) do
+            WowStubs.showQuest(kind)
+            assert.are.equal("The Defias Brotherhood has plagued Westfall for years. " ..
+                "The Defias Brotherhood has plagued Westfall for years.\n" .. HINT_MONKE, QuestInfoDescriptionText:GetText())
+            ns.Core.Set("groupWarning", false)
+            check(kind .. " talk quest")
+        end
+        -- The toggle still has every word of it.
+        ns.Core.ToggleOriginal()
+        assert.are.equal(long, QuestInfoDescriptionText:GetText())
+    end)
+
+    it("cuts a talk quest's description from Blizzard's text on every redraw, never from its own", function()
+        _G.MonkeDB = {}
+        WowStubs.quest.objectivesText = ""
+        WowStubs.quest.description = "The Defias Brotherhood " .. ("keeps raiding the farms of Westfall and "):rep(5) ..
+            "nobody stops them."
+        for _, kind in ipairs({ "detail", "log" }) do
+            WowStubs.showQuest(kind)
+            local first = QuestInfoDescriptionText:GetText()
+            -- 23 + 3 x 40 characters, then the words that still fit in 159 and the ellipsis
+            assert.are.equal("The Defias Brotherhood " .. ("keeps raiding the farms of Westfall and "):rep(3) ..
+                "keeps raiding\226\128\166\n" .. HINT_MONKE, first)
+            ns.Core.Set("groupWarning", false) -- redraws from what is on screen, which is our text now
+            assert.are.equal(first, QuestInfoDescriptionText:GetText())
+            ns.Core.Set("groupWarning", true)
+        end
+    end)
+
+    it("keeps the no-lore setting as it was: no lore section at all", function()
+        _G.MonkeDB = {}
+        ns.Core.Set("showLore", false)
         WowStubs.showQuest("detail")
-        ns.Core.Set("groupWarning", false) -- any setting change redraws
-        assert.are.equal("Lore not yet translated.\n\n" .. WowStubs.quest.description, QuestInfoDescriptionText:GetText())
+        assert.is_nil(QuestInfoDescriptionText:GetText())
+        WowStubs.quest.groupSize = 3
+        WowStubs.showQuest("log")
+        assert.are.equal("|cffff2020Bring 2 friends. Big danger.|r", QuestInfoDescriptionText:GetText())
+    end)
+
+    it("relabels the Quest Objectives header on the quest giver page, and the toggle puts it back", function()
+        WowStubs.showQuest("detail")
+        assert.are.equal("Monke do:", QuestInfoObjectivesHeader:GetText())
+        ns.Core.ToggleOriginal()
+        assert.are.equal("Quest Objectives", QuestInfoObjectivesHeader:GetText())
+        ns.Core.ToggleOriginal()
+        assert.are.equal("Monke do:", QuestInfoObjectivesHeader:GetText())
+        ns.Core.Set("voice", "plain")
+        assert.are.equal("To do:", QuestInfoObjectivesHeader:GetText())
+        WowStubs.showQuest("detail") -- Blizzard never rewrites a header: it must not become "the original"
+        ns.Core.ToggleOriginal()
+        assert.are.equal("Quest Objectives", QuestInfoObjectivesHeader:GetText())
+    end)
+
+    it("never leaves its header label behind for a view or a mode that does not want it", function()
+        WowStubs.showQuest("detail")
+        WowStubs.showQuest("log") -- the log view has no use for that header: it gets Blizzard's back
+        assert.are.equal("Quest Objectives", QuestInfoObjectivesHeader:GetText())
+        WowStubs.showQuest("detail")
+        assert.are.equal("Monke do:", QuestInfoObjectivesHeader:GetText())
+        WowStubs.showQuest("reward")
+        ns.Core.ToggleOriginal() -- toggled while another page is up
+        WowStubs.showQuest("detail")
+        assert.are.equal("Quest Objectives", QuestInfoObjectivesHeader:GetText())
+        assert.are.equal("Description", QuestInfoDescriptionHeader:GetText())
+    end)
+
+    it("gives plain voice the DB task list on the quest giver page before the quest is accepted", function()
+        local record = { l = RECORD_214.l, p = RECORD_214.p, t = RECORD_214.t, tp = { "Collect 10 Red Silk Bandana." },
+            n = 1, e = "Scout Riell", v = 3 }
+        _G.MonkeDB = { [214] = record }
+        ns.Core.Set("voice", "plain")
+        WowStubs.quest.objectives = {}
+        WowStubs.quest.onQuest = false
+        WowStubs.showQuest("detail")
+        assert.are.equal(
+            BULLET .. "Collect 10 Red Silk Bandana.\n" .. BULLET .. "Return to Scout Riell.\n\nRewards: 875 XP, 4s",
+            QuestInfoObjectivesText:GetText())
+        assert.are.equal("To do:", QuestInfoObjectivesHeader:GetText())
+
+        record.tp = { 42 } -- malformed: tp is dropped, the rest of the record still counts
+        WowStubs.showQuest("detail")
+        assert.are.equal(BULLET .. "Return to Scout Riell.\n\nRewards: 875 XP, 4s", QuestInfoObjectivesText:GetText())
+        assert.are.equal(RECORD_214.p, QuestInfoDescriptionText:GetText())
     end)
 
     it("does not break with no database at all", function()
@@ -196,10 +327,190 @@ describe("Display", function()
         WowStubs.reset()
         _G.QuestInfo_Display, _G.QuestFrame, _G.QuestFrameProgressPanel, _G.QuestMapFrame = nil, nil, nil, nil
         _G.QuestInfoDescriptionText, _G.QuestInfoObjectivesText, _G.QuestInfoRewardText, _G.QuestProgressText = nil, nil, nil, nil
+        _G.QuestInfoObjectivesHeader, _G.QuestInfoDescriptionHeader, _G.QuestInfoObjectivesFrame = nil, nil, nil
         _G.C_QuestLog = nil
         ns = WowStubs.load()
         assert.has_no.errors(WowStubs.login)
         assert.has_no.errors(ns.Display.Refresh)
+    end)
+
+    it("survives the log view pieces going missing", function()
+        WowStubs.showQuest("log")
+        -- Redraw from what is on screen with each piece gone or malformed in turn.
+        _G.QuestInfoObjectivesHeader = nil
+        _G.QuestInfoObjectivesFrame = { Objectives = "not a list" }
+        _G.C_QuestLog.GetNextWaypointText = nil
+        assert.has_no.errors(ns.Display.Refresh)
+        _G.QuestInfoObjectivesFrame = { Objectives = { {}, false } }
+        assert.has_no.errors(ns.Display.Refresh)
+        _G.QuestInfoObjectivesFrame = nil
+        assert.has_no.errors(ns.Display.Refresh)
+        assert.are.equal(HEADER_MONKE .. "\n" .. BULLET .. "Grab 10 Red Silk Bandana (3/10)\n" .. BULLET .. "Go back to Scout Riell.",
+            QuestInfoObjectivesText:GetText())
+        QuestInfoFrame.questLog = false -- the quest giver page, with no header to relabel
+        assert.has_no.errors(ns.Display.Refresh)
+        assert.has_no.errors(ns.Core.ToggleOriginal)
+    end)
+
+    describe("log view", function()
+        -- Everything the player can see in the quest log or map details, top to bottom.
+        local function visibleText()
+            local parts = {}
+            local function add(region)
+                if region:IsShown() then
+                    parts[#parts + 1] = region:GetText() or ""
+                end
+            end
+            add(QuestInfoObjectivesText)
+            if QuestInfoObjectivesFrame:IsShown() then
+                for _, line in ipairs(QuestInfoObjectivesFrame.Objectives) do
+                    add(line)
+                end
+            end
+            add(QuestInfoDescriptionHeader)
+            add(QuestInfoDescriptionText)
+            return table.concat(parts, "\n")
+        end
+
+        local function count(haystack, needle)
+            local _, n = haystack:gsub(needle, "")
+            return n
+        end
+
+        it("shows the tasks once, first, under the tasks header", function()
+            WowStubs.quest.waypoint = "Take the boat to Menethil Harbor"
+            WowStubs.quest.objectives = {
+                { text = "10/10 Red Silk Bandana", type = "item", finished = true, numFulfilled = 10, numRequired = 10 },
+            }
+            WowStubs.showQuest("log")
+            assert.are.equal(
+                HEADER_MONKE .. "\n" ..
+                BULLET .. "Way: Take the boat to Menethil Harbor.\n" ..
+                GREY .. BULLET .. "Grab 10 Red Silk Bandana (10/10)|r\n" ..
+                BULLET .. "Go back to Scout Riell.",
+                QuestInfoObjectivesText:GetText())
+            -- Blizzard's own list keeps its lines (the layout hangs off them) but they say nothing.
+            local lines = QuestInfoObjectivesFrame.Objectives
+            assert.are.equal(2, #lines)
+            for _, line in ipairs(lines) do
+                assert.is_true(line:IsShown())
+                assert.is_nil(line:GetText())
+            end
+            assert.are.equal("Description", QuestInfoDescriptionHeader:GetText())
+            assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
+            local seen = visibleText()
+            assert.are.equal(1, count(seen, "Red Silk Bandana"))
+            assert.are.equal(1, count(seen, "Menethil Harbor"))
+            assert.is_nil(seen:find("Monke get", 1, true)) -- the map has its own rewards panel
+        end)
+
+        it("has no which-way bullet when the game gives none", function()
+            WowStubs.showQuest("log")
+            assert.are.equal(HEADER_MONKE .. "\n" .. BULLET .. "Grab 10 Red Silk Bandana (3/10)\n" .. BULLET .. "Go back to Scout Riell.",
+                QuestInfoObjectivesText:GetText())
+            assert.is_nil(QuestInfoObjectivesFrame.Objectives[1]:GetText())
+        end)
+
+        it("the toggle restores every fontstring it touched, byte for byte, and back", function()
+            local quest = WowStubs.quest
+            quest.waypoint = "Take the boat to Menethil Harbor"
+            quest.objectivesText = "Bring 10 bandanas,  $n.|cffff0000 now|r"
+            quest.description = "Line one.\n\n  Odd  spacing \226\128\148 dash"
+            quest.objectives = {
+                { text = "3/10 Red Silk Bandana", type = "item", finished = false, numFulfilled = 3, numRequired = 10 },
+                { text = "Speak with Gryan", type = "event", finished = true, numFulfilled = 1, numRequired = 1 },
+            }
+            local blizzard = { "Optional: Take the boat to Menethil Harbor", "3/10 Red Silk Bandana",
+                "Speak with Gryan (Complete)" }
+            WowStubs.showQuest("log")
+            local lines = QuestInfoObjectivesFrame.Objectives
+            local ours = QuestInfoObjectivesText:GetText()
+            assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
+
+            ns.Core.ToggleOriginal()
+            assert.are.equal(quest.objectivesText, QuestInfoObjectivesText:GetText())
+            assert.are.equal(quest.description, QuestInfoDescriptionText:GetText())
+            for i, text in ipairs(blizzard) do
+                assert.are.equal(text, lines[i]:GetText())
+            end
+            assert.are.equal("Description", QuestInfoDescriptionHeader:GetText())
+            assert.are.equal("Quest Objectives", QuestInfoObjectivesHeader:GetText())
+
+            ns.Core.ToggleOriginal()
+            assert.are.equal(ours, QuestInfoObjectivesText:GetText())
+            assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
+            for i = 1, #blizzard do
+                assert.is_nil(lines[i]:GetText())
+            end
+
+            ns.Core.ToggleOriginal() -- and once more, from the emptied state
+            for i, text in ipairs(blizzard) do
+                assert.are.equal(text, lines[i]:GetText())
+            end
+        end)
+
+        it("stays right through Blizzard redraws and a voice switch", function()
+            local quest = WowStubs.quest
+            quest.waypoint = "Take the boat to Menethil Harbor"
+            WowStubs.showQuest("log")
+            local lines = QuestInfoObjectivesFrame.Objectives
+            quest.objectives[1].text = "4/10 Red Silk Bandana"
+            quest.objectives[1].numFulfilled = 4
+            WowStubs.showQuest("log") -- Blizzard writes fresh strings everywhere
+            WowStubs.showQuest("log")
+            assert.are.equal(HEADER_MONKE .. "\n" .. BULLET .. "Way: Take the boat to Menethil Harbor.\n" ..
+                BULLET .. "Grab 10 Red Silk Bandana (4/10)\n" .. BULLET .. "Go back to Scout Riell.",
+                QuestInfoObjectivesText:GetText())
+
+            ns.Core.Set("voice", "plain")
+            assert.are.equal(HEADER_PLAIN .. "\n" .. BULLET .. "Next: Take the boat to Menethil Harbor.\n" ..
+                BULLET .. "Collect 10 Red Silk Bandana (4/10)\n" .. BULLET .. "Return to Scout Riell.",
+                QuestInfoObjectivesText:GetText())
+            assert.are.equal(RECORD_214.p, QuestInfoDescriptionText:GetText())
+            assert.is_nil(lines[1]:GetText())
+            assert.is_nil(lines[2]:GetText())
+
+            ns.Core.ToggleOriginal()
+            assert.are.equal("Optional: Take the boat to Menethil Harbor", lines[1]:GetText())
+            assert.are.equal("4/10 Red Silk Bandana", lines[2]:GetText()) -- the redraw's string, not the first one
+            assert.are.equal(quest.objectivesText, QuestInfoObjectivesText:GetText())
+            assert.are.equal(quest.description, QuestInfoDescriptionText:GetText())
+        end)
+
+        it("stays on Blizzard's list for the next quest while toggled off", function()
+            ns.Core.ToggleOriginal()
+            WowStubs.showQuest("log")
+            assert.are.equal(WowStubs.quest.objectivesText, QuestInfoObjectivesText:GetText())
+            assert.are.equal("3/10 Red Silk Bandana", QuestInfoObjectivesFrame.Objectives[1]:GetText())
+        end)
+
+        it("gives Blizzard's lines back when the quest giver page takes the frame", function()
+            WowStubs.showQuest("log")
+            local line = QuestInfoObjectivesFrame.Objectives[1]
+            assert.is_nil(line:GetText())
+            WowStubs.showQuest("detail")
+            assert.are.equal("3/10 Red Silk Bandana", line:GetText())
+            assert.are.equal("Monke do:", QuestInfoObjectivesHeader:GetText())
+        end)
+
+        it("does not carry one quest's lines into the next", function()
+            WowStubs.quest.objectives[2] = { text = "0/1 Defias Letter", type = "item", finished = false,
+                numFulfilled = 0, numRequired = 1 }
+            WowStubs.showQuest("log")
+            WowStubs.quest = {
+                id = 999, description = "Second quest text.", objectivesText = "Kill things.", onQuest = true,
+                objectives = { { text = "0/5 Murloc slain", type = "monster", finished = false, numFulfilled = 0, numRequired = 5 } },
+                groupSize = 0, xp = 0, money = 0, items = {}, choices = {},
+            }
+            WowStubs.showQuest("log")
+            local lines = QuestInfoObjectivesFrame.Objectives
+            assert.is_nil(lines[1]:GetText())
+            assert.is_false(lines[2]:IsShown())
+            ns.Core.ToggleOriginal()
+            assert.are.equal("0/5 Murloc slain", lines[1]:GetText())
+            assert.are.equal("Kill things.", QuestInfoObjectivesText:GetText())
+            assert.are.equal("Second quest text.", QuestInfoDescriptionText:GetText())
+        end)
     end)
 end)
 

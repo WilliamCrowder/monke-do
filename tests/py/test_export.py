@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from lupa import lua51
 
-from pipeline import db, export, validate
+from pipeline import db, export, rules, validate
 from pipeline.llm import summarize
 
 NASTY = 'He said "hi"\\ and\nleft\r\tfast \x01\x7f 9 café 猫'
@@ -108,17 +108,17 @@ def test_file_layout_ordering_and_field_omission(tmp_path: Path) -> None:
     lines = [l for l in lines if not l.startswith("--")]  # the notice header is prose
     assert lines == [
         "MonkeDB = {",
-        '  [7] = { t = { "Bonk 8 Kobold Vermin.", "Go back to Marshal McBride." }, n = 1, '
-        'e = "Marshal McBride", v = 3 },',
-        '  [9] = { t = { "Bonk 3 Wolf.", "Go back. Get shiny." }, n = 1, v = 3 },',
+        '  [7] = { t = { "Bonk 8 Kobold Vermin.", "Go back to Marshal McBride." }, '
+        'tp = { "Kill 8 Kobold Vermin." }, n = 1, e = "Marshal McBride", v = 3 },',
+        '  [9] = { t = { "Bonk 3 Wolf.", "Go back. Get shiny." }, tp = { "Kill 3 Wolf." }, n = 1, v = 3 },',
         '  [214] = { l = "Scout Riell want 10 Red Silk Bandanas. Monke go get.", '
         'p = "Scout Riell needs 10 Red Silk Bandanas.", '
-        't = { "Grab 10 Red Silk Bandana.", "Go back to Scout Riell." }, n = 1, '
-        'e = "Scout Riell", v = 3 },',
+        't = { "Grab 10 Red Silk Bandana.", "Go back to Scout Riell." }, '
+        'tp = { "Collect 10 Red Silk Bandana." }, n = 1, e = "Scout Riell", v = 3 },',
         '  [301] = { l = "Monke talk.", p = "Go and talk.", t = { "Go back. Get shiny." }, '
         'g = "Bring friends.", v = 3 },',
-        '  [90010] = { t = { "Bonk The Warden.", "Go back to Keeper Ash." }, n = 1, '
-        'e = "Keeper Ash", v = 3 },',
+        '  [90010] = { t = { "Bonk The Warden.", "Go back to Keeper Ash." }, '
+        'tp = { "Kill The Warden." }, n = 1, e = "Keeper Ash", v = 3 },',
         "}",
     ]
     assert "SHOULD NOT SHIP" not in text  # rejected summaries never reach players
@@ -149,9 +149,12 @@ def test_exported_files_are_valid_lua_51(tmp_path: Path) -> None:
     assert list(g.MonkeDB[214].t.values()) == ["Grab 10 Red Silk Bandana.", "Go back to Scout Riell."]
     assert (g.MonkeDB[214].n, g.MonkeDB[214].e, g.MonkeDB[214].v) == (1, "Scout Riell", 3)
     assert g.MonkeDB[214].g is None
+    assert list(g.MonkeDB[214].tp.values()) == ["Collect 10 Red Silk Bandana."]
     assert g.MonkeDB[7].l == NASTY
+    assert list(g.MonkeDB[7].tp.values()) == ["Kill 8 Kobold Vermin."]
     assert g.MonkeDB[9].l is None and g.MonkeDB[9].e is None and g.MonkeDB[9].n == 1
     assert g.MonkeDB[301].n is None and g.MonkeDB[301].g == "Bring friends."
+    assert g.MonkeDB[301].tp is None
     assert g.MonkeDB[300] is None
     assert sorted(g.MonkeDB.keys()) == [7, 9, 214, 301, 90010]
 
@@ -196,6 +199,7 @@ def test_summary_for_old_quest_text_is_not_exported(tmp_path: Path) -> None:
     record = load_lua(tmp_path).MonkeDB[214]
     assert record.l is None  # the cached lore described the old text
     assert list(record.t.values()) == ["Grab 12 Red Silk Bandana.", "Go back to Scout Riell."]
+    assert list(record.tp.values()) == ["Collect 12 Red Silk Bandana."]
 
 
 def test_other_prompt_versions_are_ignored(tmp_path: Path) -> None:
@@ -219,3 +223,102 @@ def test_delivery_quests_carry_the_d_flag(tmp_path: Path) -> None:
     line = next(l for l in (tmp_path / export.DB_FILE).read_text(encoding="utf-8").splitlines() if "[214]" in l)
     assert 'e = "Scout Riell", d = true, v = 3' in line
     assert "Go see Scout Riell." in line
+
+
+# ---------------------------------------------------------------- tp (plain-voice bullets)
+
+# One objective of each shape the plain templates distinguish, in idx order.
+MIXED = [
+    ("monster", "Kobold Vermin", 8),
+    ("item", "Candle", 1),
+    ("object", "Old Lever", 1),
+    ("reputation", "Argent Dawn", 1),
+]
+MIXED_PLAIN = ["Kill 8 Kobold Vermin.", "Collect Candle.", "Use Old Lever.", "Earn reputation with Argent Dawn."]
+
+
+def record_line(tmp_path: Path, quest_id: int) -> str:
+    text = (tmp_path / export.DB_FILE).read_text(encoding="utf-8")
+    return next(l for l in text.splitlines() if l.startswith(f"  [{quest_id}] = "))
+
+
+def test_tp_is_the_plain_bullet_of_each_structured_objective(tmp_path: Path) -> None:
+    conn = make_db()
+    add_quest(conn, 500, "Mixed Bag", "Do many things.", "Marshal Dughan", MIXED)
+    add_quest(conn, 501, "Mixed Bag Too", "Do many things.", "Marshal Dughan", MIXED)
+    db.resolve_quests(conn)
+    add_summary(conn, 501, {"lore_monke": "Monke busy.", "lore_plain": "A busy day.",
+                            "tasks": ["Bonk 8 Kobold Vermin.", "Grab Candle.", "Poke Old Lever.",
+                                      "Make Argent Dawn like ape.", "Go back to Marshal Dughan."],
+                            "group_line": None})
+    export.write(conn, tmp_path, build="b", generated="2026-10-01")
+    g = load_lua(tmp_path)
+    for quest_id in (500, 501):  # rule-based, then summarised
+        record = g.MonkeDB[quest_id]
+        assert list(record.tp.values()) == MIXED_PLAIN
+        assert record.n == len(MIXED)
+        # the same function the rule-based monke bullets and the Rules.lua mirror come from
+        objectives = validate.load_context(conn, quest_id).objectives
+        assert MIXED_PLAIN == [rules.task_for(o, rules.PLAIN) for o in objectives]
+    assert g.MonkeDB[501].l == "Monke busy."
+
+
+def test_tp_follows_objective_order_not_insertion_order(tmp_path: Path) -> None:
+    conn = make_db()
+    add_quest(conn, 502, "Backwards", "Do two things.", "Marshal Dughan")
+    db.replace_objectives(conn, 502, [
+        db.Objective(quest_id=502, idx=idx, type=kind, target_name=name, amount=amount,
+                     amount_source="text", source="questie")
+        for idx, (kind, name, amount) in ((2, ("item", "Candle", 5)), (1, ("monster", "Kobold Vermin", 8)))
+    ])
+    db.resolve_quests(conn)
+    export.write(conn, tmp_path, build="b", generated="2026-10-01")
+    assert list(load_lua(tmp_path).MonkeDB[502].tp.values()) == ["Kill 8 Kobold Vermin.", "Collect 5 Candle."]
+
+
+def test_tp_only_when_the_quest_has_structured_objectives(tmp_path: Path) -> None:
+    conn = make_db()
+    add_quest(conn, 503, "Just Talk", "Speak with Gryan.", "Gryan Stoutmantle")  # rule-based, k = 0
+    db.resolve_quests(conn)
+    export.write(conn, tmp_path, build="b", generated="2026-10-01")
+    g = load_lua(tmp_path)
+    assert g.MonkeDB[503].tp is None and g.MonkeDB[503].n is None
+    assert list(g.MonkeDB[503].t.values()) == ["Go back to Gryan Stoutmantle."]
+    assert g.MonkeDB[301].tp is None  # summarised, k = 0
+    assert "tp = " not in record_line(tmp_path, 503) and "tp = " not in record_line(tmp_path, 301)
+
+
+def test_field_order_with_every_field(tmp_path: Path) -> None:
+    conn = make_db()
+    conn.execute("UPDATE quests SET turnin_kind = 'other' WHERE id = 214")
+    add_summary(conn, 214, {**S214, "group_line": "Bring friends.",
+                            "tasks": ["Grab 10 Red Silk Bandana.", "Go see Scout Riell."]})
+    export.write(conn, tmp_path, build="b", generated="2026-10-01")
+    line = record_line(tmp_path, 214)
+    keys = ["l", "p", "t", "tp", "n", "e", "d", "g", "v"]
+    positions = [line.index(f" {key} = ") for key in keys]
+    assert positions == sorted(positions), line
+    assert line.endswith('tp = { "Collect 10 Red Silk Bandana." }, n = 1, e = "Scout Riell", d = true, '
+                         'g = "Bring friends.", v = 3 },')
+
+
+def test_tp_escapes_and_loads_as_lua_51(tmp_path: Path) -> None:
+    conn = make_db()
+    add_quest(conn, 504, "Nasty", "Kill it.", "Scout Riell", [("monster", 'The "Big"\\ One\nof\tdoom', 2)])
+    db.resolve_quests(conn)
+    export.write(conn, tmp_path, build="b", generated="2026-10-01")
+    tp = list(load_lua(tmp_path).MonkeDB[504].tp.values())
+    assert tp == ['Kill 2 The "Big"\\ One of doom.']  # rules.py folds whitespace; export escapes the rest
+    assert "\n" not in record_line(tmp_path, 504)
+
+
+def test_tp_output_is_byte_deterministic(tmp_path: Path) -> None:
+    conn = make_db()
+    add_quest(conn, 500, "Mixed Bag", "Do many things.", "Marshal Dughan", MIXED)
+    db.resolve_quests(conn)
+    export.write(conn, tmp_path / "a", build="b", generated="2026-10-01")
+    export.write(conn, tmp_path / "b", build="b", generated="2026-10-01")
+    first = (tmp_path / "a" / export.DB_FILE).read_bytes()
+    assert first == (tmp_path / "b" / export.DB_FILE).read_bytes()
+    assert b'tp = { "Kill 8 Kobold Vermin.", "Collect Candle.", "Use Old Lever.", ' \
+           b'"Earn reputation with Argent Dawn." }, n = 4, ' in first

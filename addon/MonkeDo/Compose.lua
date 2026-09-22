@@ -13,12 +13,40 @@ ns.Compose = Compose
 
 Compose.SCHEMA = 3
 Compose.GROUP_COLOR = "|cffff2020"
+Compose.HEADER_COLOR = "|cffffd100" -- NORMAL_FONT_COLOR, Blizzard's gold: the log view's list header
+Compose.DONE_COLOR = "|cff808080"   -- grey: objectives the game reports finished
+Compose.HINT_COLOR = "|cff808080"   -- grey: the "long story? use the toggle" line
+Compose.OPENING_CHARS = 160         -- the most of a description shown in place of missing lore
+Compose.ELLIPSIS = "\226\128\166"   -- U+2026
 
 local function stripFinalStop(s)
     return (s:gsub("[%.%s]+$", ""))
 end
 
--- A record from a newer schema, or a malformed one, is ignored rather than trusted.
+local function trim(s)
+    return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- One line, runs of whitespace (paragraph breaks included) down to single spaces.
+local function squash(s)
+    return trim((s:gsub("%s+", " ")))
+end
+
+local function isStringList(value)
+    if type(value) ~= "table" then
+        return false
+    end
+    for i = 1, #value do
+        if type(value[i]) ~= "string" then
+            return false
+        end
+    end
+    return true
+end
+
+-- A record from a newer schema, or a malformed one, is ignored rather than trusted. `tp` is
+-- the exception: it only helps plain voice before a quest is accepted, so a malformed `tp`
+-- costs the record that field and nothing else (the DB table itself is left untouched).
 function Compose.UsableRecord(record)
     if type(record) ~= "table" then
         return nil
@@ -32,20 +60,21 @@ function Compose.UsableRecord(record)
     if record.p ~= nil and type(record.p) ~= "string" then
         return nil
     end
-    if record.t ~= nil then
-        if type(record.t) ~= "table" then
-            return nil
-        end
-        for _, line in ipairs(record.t) do
-            if type(line) ~= "string" then
-                return nil
-            end
-        end
+    if record.t ~= nil and not isStringList(record.t) then
+        return nil
     end
     if record.n ~= nil then
         if type(record.n) ~= "number" or record.n < 0 or record.n > #(record.t or {}) then
             return nil
         end
+    end
+    if record.tp ~= nil and not isStringList(record.tp) then
+        local copy = {}
+        for key, value in pairs(record) do
+            copy[key] = value
+        end
+        copy.tp = nil
+        return copy
     end
     return record
 end
@@ -267,6 +296,17 @@ local function groupLine(input, record, voice)
     return Voice.Get("group_tag", voice)
 end
 
+-- A voice template around a piece of the game's own text, with one final full stop: text
+-- that brought its own "!" or "?" keeps it (Rules.lua does the same for objective lines).
+local function sentenceLine(key, voice, text)
+    text = stripFinalStop(text)
+    local line = Voice.Format(key, voice, { text = text })
+    if text:find("[!?]$") then
+        line = (line:gsub("%.$", ""))
+    end
+    return line
+end
+
 -- input = {
 --   record        MonkeDB entry or nil
 --   objectives    C_QuestLog.GetQuestObjectives result, or nil
@@ -275,14 +315,18 @@ end
 --   showProgress  true when the quest is in the log
 --   groupSize, groupTag
 --   rewards       { xp, money, items = {names}, choices = {names} } or nil
+--   waypoint      C_QuestLog.GetNextWaypointText, or nil (the log views pass it)
 -- }
--- Returns { voice, group, lore, loreMissing, tasks = {...}, rewards }.
+-- Returns { voice, group, lore, loreMissing, tasks = {...}, numObjectiveTasks, finished,
+-- waypoint, rewards }. Everything is plain text: colours are added by the *Text functions
+-- below, so other readers of `tasks` (the Now line) get clean strings.
+-- finished[i] is true when tasks[i] is an objective the game reports finished.
 function Compose.Build(input)
     input = input or {}
     local voice = Voice.IsVoice(input.voice) and input.voice or Voice.DEFAULT
     local record = Compose.UsableRecord(input.record)
     local live = Rules.Visible(input.objectives)
-    local out = { voice = voice, tasks = {} }
+    local out = { voice = voice, tasks = {}, finished = {} }
 
     out.group = groupLine(input, record, voice)
 
@@ -304,15 +348,21 @@ function Compose.Build(input)
 
     local n = record and record.t and (record.n or 0) or 0
     local lines
-    if voice == "monke" and record and record.t and n > 0 then
+    if n > 0 then
         if #live == 0 then
             -- Offered but not yet accepted, or not loaded yet: nothing to pair with, so the
-            -- DB bullets stand on their own.
-            lines = {}
-            for i = 1, n do
-                lines[i] = record.t[i]
+            -- DB bullets stand on their own. Plain voice has its own copy in `tp`.
+            local source = record.t
+            if voice == "plain" then
+                source = record.tp
             end
-        elseif n == #live then
+            if source and #source >= n then
+                lines = {}
+                for i = 1, n do
+                    lines[i] = source[i]
+                end
+            end
+        elseif voice == "monke" and n == #live then
             local order = assign(record.t, n, live)
             if order then
                 lines = {}
@@ -326,13 +376,21 @@ function Compose.Build(input)
         lines = Rules.BuildTasks(live, voice)
     end
     for i, line in ipairs(lines) do
-        local progress = input.showProgress and live[i] and Rules.Progress(live[i], voice)
+        local objective = input.showProgress and live[i]
+        local progress = objective and Rules.Progress(objective, voice)
         if progress then
             line = stripFinalStop(line) .. " " .. progress
         end
         out.tasks[#out.tasks + 1] = line
+        if objective and objective.finished then
+            out.finished[i] = true
+        end
     end
     out.numObjectiveTasks = #out.tasks -- the rest are hints and the turn-in line
+
+    if type(input.waypoint) == "string" and trim(input.waypoint) ~= "" then
+        out.waypoint = sentenceLine("waypoint", voice, trim(input.waypoint))
+    end
 
     if voice == "monke" and record and record.t and #record.t > n then
         for i = n + 1, #record.t do
@@ -346,9 +404,104 @@ function Compose.Build(input)
     return out
 end
 
--- Text for the description slot: group warning, then lore. With no lore yet, say so and
--- keep Blizzard's own text underneath so the player loses nothing.
-function Compose.DescriptionText(sections, originalText)
+-- Byte length of the first `count` UTF-8 characters of s (all of s when it is shorter), so a
+-- cut never splits a character.
+local function charsToBytes(s, count)
+    local seen = 0
+    for i = 1, #s do
+        local byte = s:byte(i)
+        if byte < 128 or byte >= 192 then -- the first byte of a character
+            if seen == count then
+                return i - 1
+            end
+            seen = seen + 1
+        end
+    end
+    return #s
+end
+
+-- Where each sentence ends (the byte index of its last character): ".", "!" or "?", any
+-- closing quotes or brackets, then a space or the end of the text.
+local function sentenceEnds(text)
+    local ends = {}
+    local from = 1
+    while true do
+        local _, last = text:find("[%.!?]+[\"'%)%]]*", from)
+        if not last then
+            return ends
+        end
+        local after = text:sub(last + 1, last + 1)
+        if after == "" or after == " " then
+            ends[#ends + 1] = last
+        end
+        from = last + 1
+    end
+end
+
+-- The start of a long text, on one line: its first sentence or two when they end within
+-- `limit` characters, else the words that fit and "…". Never more than `limit` characters.
+function Compose.Opening(text, limit)
+    limit = limit or Compose.OPENING_CHARS
+    if type(text) ~= "string" then
+        return ""
+    end
+    text = squash(text)
+    local fits = charsToBytes(text, limit)
+    local cut
+    for count, last in ipairs(sentenceEnds(text)) do
+        if last > fits then
+            break
+        end
+        cut = last
+        if count == 2 then
+            break
+        end
+    end
+    if cut then
+        return text:sub(1, cut)
+    end
+    if fits >= #text then
+        return text
+    end
+    local room = charsToBytes(text, limit - 1) -- one character is left for the ellipsis
+    local head = text:sub(1, room)
+    if text:sub(room + 1, room + 1) ~= " " then
+        local space = head:match("^.*() ") -- the last space: drop the word it would split
+        if space then
+            head = head:sub(1, space - 1)
+        end
+    end
+    head = (head:gsub("[%s,;:%-]+$", ""))
+    if head == "" then
+        head = text:sub(1, room)
+    end
+    return head .. Compose.ELLIPSIS
+end
+
+-- What the description slot shows for a quest with no lore yet: Blizzard's own short
+-- objectives sentence, or for a talk quest that has none, the opening of the description.
+-- When that leaves some of Blizzard's story unseen, a grey line points at the toggle.
+-- The whole long description is exactly what this addon is for, so it never comes back here.
+function Compose.LoreStandIn(voice, description, sentence)
+    local full = type(description) == "string" and squash(description) or ""
+    local text = type(sentence) == "string" and trim(sentence) or ""
+    if text == "" then
+        text = Compose.Opening(full)
+    end
+    if text == "" then
+        return nil
+    end
+    if full ~= "" and squash(text) ~= full then
+        local hint = Voice.Format("toggle_hint", voice, { button = Voice.Get("toggle_to_original", voice) })
+        text = text .. "\n" .. Compose.HINT_COLOR .. hint .. "|r"
+    end
+    return text
+end
+
+-- Text for the description slot: group warning, then lore, or with no lore yet the stand-in
+-- built from Blizzard's own text. `originalText` is Blizzard's description and
+-- `objectivesText` Blizzard's objectives sentence, as the game wrote them.
+function Compose.DescriptionText(sections, originalText, objectivesText)
     local parts = {}
     if sections.group then
         parts[#parts + 1] = Compose.GROUP_COLOR .. sections.group .. "|r"
@@ -356,29 +509,45 @@ function Compose.DescriptionText(sections, originalText)
     if sections.lore then
         parts[#parts + 1] = sections.lore
     elseif sections.loreMissing then
-        parts[#parts + 1] = Voice.Get("no_lore", sections.voice)
-        if originalText and originalText ~= "" then
-            parts[#parts + 1] = originalText
-        end
+        parts[#parts + 1] = Compose.LoreStandIn(sections.voice, originalText, objectivesText)
     end
     return table.concat(parts, "\n\n")
 end
 
-local function bullets(tasks)
+-- One bullet per task, tasks[1..last] (all of them by default), finished objectives grey.
+local function bullets(sections, last)
+    local finished = sections.finished or {}
     local lines = {}
-    for i, task in ipairs(tasks) do
-        lines[i] = Voice.BULLET .. task
+    for i = 1, last or #sections.tasks do
+        local line = Voice.BULLET .. sections.tasks[i]
+        if finished[i] then
+            line = Compose.DONE_COLOR .. line .. "|r"
+        end
+        lines[i] = line
     end
     return table.concat(lines, "\n")
 end
 
--- Text for the objectives slot: bullets, then the rewards line.
+-- Text for the objectives slot on the quest giver page: bullets, then the rewards line. The
+-- page's own "Quest Objectives" header above it is relabelled by Display.
 function Compose.ObjectivesText(sections)
-    local text = bullets(sections.tasks)
+    local text = bullets(sections)
     if sections.rewards then
         text = text .. "\n\n" .. sections.rewards
     end
     return text
+end
+
+-- Text for the objectives slot in the quest log and the map's quest details, where it is the
+-- one task list: a header line, the game's "which way" line when it has one, the bullets. No
+-- rewards line: both views draw their own rewards panel.
+function Compose.LogObjectivesText(sections)
+    local lines = { Compose.HEADER_COLOR .. Voice.Get("tasks_header", sections.voice) .. "|r" }
+    if sections.waypoint then
+        lines[#lines + 1] = Voice.BULLET .. sections.waypoint
+    end
+    lines[#lines + 1] = bullets(sections)
+    return table.concat(lines, "\n")
 end
 
 -- Text for the "are you done yet?" panel. The player is already standing at the NPC, so
@@ -392,11 +561,7 @@ function Compose.ProgressText(sections, isReady)
     if count == 0 then
         return nil
     end
-    local todo = {}
-    for i = 1, count do
-        todo[i] = sections.tasks[i]
-    end
-    return Voice.Get("progress_todo", sections.voice) .. "\n\n" .. bullets(todo)
+    return Voice.Get("progress_todo", sections.voice) .. "\n\n" .. bullets(sections, count)
 end
 
 function Compose.CompleteText(sections)

@@ -27,15 +27,18 @@ sorted by ID in the file:
 
 ```lua
 MonkeDB = {
-  [214] = { l = "...", p = "...", t = { "...", "..." }, n = 1, e = "Scout Riell", v = 3 },
+  [214] = { l = "...", p = "...", t = { "...", "..." }, tp = { "..." }, n = 1, e = "Scout Riell", v = 3 },
 }
 ```
+
+Fields are written in the order `l, p, t, tp, n, e, d, g, v`.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `l` | string | no | Lore in monke voice. 1-2 sentences, under 160 characters. |
 | `p` | string | no | Lore in plain-English voice. Same limits. |
 | `t` | list of strings | no | Ordered task bullets in monke voice. No progress counts, no bullet glyphs. |
+| `tp` | list of strings | no | Plain-voice objective bullets, one per structured objective, in order: `pipeline/rules.py` `task_for(o, PLAIN)`, the templates `Rules.lua` uses for plain voice. Written only when the quest has structured objectives (`n > 0`), so it has exactly `n` entries. No turn-in line, no progress counts. |
 | `n` | integer | no (default 0) | How many leading entries of `t` map 1:1, in order, to the quest's live objectives. |
 | `e` | string | no | Turn-in NPC name ("end"), when a source gives one. |
 | `d` | boolean | no (default false) | True when `e` is not the quest giver (a different NPC, or an object such as a mailbox): "Go see" / "Go to" rather than "Go back to" / "Return to". |
@@ -47,17 +50,24 @@ A record with neither `l` nor `t` is never exported.
 ### Rendering rules the addon follows
 
 1. Lore: `l` in monke voice, `p` in plain voice. If the chosen one is missing,
-   use the other. If both are missing there is no lore section.
+   use the other. If both are missing, the lore section shows Blizzard's own short
+   objectives sentence instead (for a quest with none, the first sentence or two of
+   its description, at most 160 characters) and a grey line pointing at the
+   original-text toggle. The full description is shown only by that toggle.
 2. Objective bullets, monke voice: if `t` exists and `n` equals the number of
    live objectives, use `t[1..n]`. Otherwise build them from the live objectives
-   with `Rules.lua`. Plain voice always builds them with `Rules.lua`.
+   with `Rules.lua`. Plain voice builds them from the live objectives with
+   `Rules.lua`; with no live objectives it uses `tp` (rule 4).
 3. Live progress such as `(3/15)` is appended to objective bullets only, and
    always comes from `C_QuestLog.GetQuestObjectives`, never from the DB.
 4. Trailing bullets: monke voice appends `t[n+1..#t]` (hints, then the turn-in
    line last). Plain voice appends a rule-based turn-in line using `e` and `d`.
    With no record, both voices append a generic turn-in line. When the game
    reports no objectives at all (a quest that is offered but not yet accepted),
-   monke voice shows `t[1..n]` as they are, without progress.
+   monke voice shows `t[1..n]` as they are, without progress, and plain voice
+   shows `tp[1..n]` the same way when `tp` has at least `n` entries. A `tp` that
+   is not a list of strings is ignored on its own; the rest of the record still
+   counts. Older addons ignore `tp`, which is why the schema stays at 3.
 5. Group line: shown when the suggested group size is above 1 or the quest tag
    is Elite, Group, Dungeon or Raid. Monke voice uses `g` when present, else
    the `Voice.lua` template.
@@ -175,7 +185,8 @@ are never invoked by tests or CI.
 
 `tasks[1..k]` map in order to the `k` structured objectives. Any extra hints
 follow. The last entry is the turn-in line. `export.py` maps this to
-`l, p, t, n = k, e, g`.
+`l, p, t, n = k, e, g`, and adds `tp` from `pipeline/rules.py` (rule-based
+records get `tp` too).
 
 With `k = 0` the summary holds no objective bullets at all, only hints and the
 turn-in line: the addon builds objective bullets from the live quest log and
