@@ -3,4 +3,4 @@
 -- Derived in part from the Questie database (https://github.com/Questie/QuestieDB, GPLv3):
 -- quest titles, objective sentences, target and turn-in names. Modified by the Monke Do
 -- pipeline, which adds the summaries and task lines.
-MonkeDB_Meta = { build = "1.60.1.69913", generated = "2026-09-22", count = 4241, schema = 3, prompt = "v1" }
+MonkeDB_Meta = { build = "1.60.1.69913", generated = "2026-09-22", count = 4243, schema = 3, prompt = "v1" }
