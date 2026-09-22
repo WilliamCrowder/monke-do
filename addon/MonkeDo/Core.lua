@@ -14,6 +14,7 @@ Core.DEFAULTS = {
     showLore = true,
     groupWarning = true,
     tracker = true,
+    nowLine = true,
     minimap = { hide = false },
 }
 
@@ -61,6 +62,13 @@ function Core.Set(key, value)
     local settings = ns.settings or Core.InitSettings()
     settings[key] = value
     Core.NotifyChanged()
+end
+
+-- For a value that changes nothing on screen by itself (the Now line's position): saved,
+-- with no redraw.
+function Core.Store(key, value)
+    local settings = ns.settings or Core.InitSettings()
+    settings[key] = value
 end
 
 -- Display and Tracker register here so a settings change redraws what is on screen.
@@ -117,6 +125,8 @@ function Core.PrintHelp()
     print("  /monke showlore on||off")
     print("  /monke group on||off")
     print("  /monke tracker on||off")
+    print("  /monke pick - which quest now? Again: the next one. A key for it: Keybindings, AddOns")
+    print("  /monke now on||off||reset - the Now line above the quest tracker")
     print("  /monke version")
 end
 
@@ -159,6 +169,20 @@ function Core.HandleSlash(message)
     elseif command == "tracker" then
         Core.Set("tracker", parseSwitch(rest, Core.Get("tracker")))
         Core.Print("tracker text: " .. onOff(Core.Get("tracker")))
+    elseif command == "pick" then
+        if ns.Pick then
+            ns.Pick.Next()
+        end
+    elseif command == "now" then
+        if rest == "reset" then
+            if ns.Now then
+                ns.Now.ResetPosition()
+            end
+            Core.Print("Now line: back in its first spot")
+            return
+        end
+        Core.Set("nowLine", parseSwitch(rest, Core.Get("nowLine")))
+        Core.Print("Now line: " .. onOff(Core.Get("nowLine")))
     elseif command == "version" then
         Core.Print(Core.VersionText())
     else
@@ -198,6 +222,9 @@ local function buildSettingsPanel()
         "Warn at the top of the quest when it is meant for a group.")
     Settings.CreateCheckbox(category, register("tracker", "boolean", "Tracker text"),
         "Use the same short wording in the objective tracker.")
+    Settings.CreateCheckbox(category, register("nowLine", "boolean", "Now line"),
+        "One next step for the tracked quest, and how far away it is, just above the quest tracker. "
+        .. "Click it for Monke pick. A key for Monke pick: Keybindings, AddOns.")
 
     Settings.RegisterAddOnCategory(category)
     Core.categoryID = category:GetID()
@@ -239,6 +266,16 @@ function MonkeDo_OnAddonCompartmentClick()
     Core.OpenSettings()
 end
 
+-- Named in Bindings.xml (binding MONKEDO_PICK). The labels show in Keybindings, AddOns.
+BINDING_HEADER_MONKEDO = "Monke Do"
+BINDING_NAME_MONKEDO_PICK = "Monke pick: which quest now?"
+
+function MonkeDo_Pick()
+    if ns.Pick then
+        return ns.Pick.Next()
+    end
+end
+
 function Core.OnLogin()
     local ok, err = pcall(buildSettingsPanel)
     if not ok then
@@ -250,6 +287,9 @@ function Core.OnLogin()
     end
     if ns.Tracker then
         ns.Tracker.Enable()
+    end
+    if ns.Now then
+        ns.Now.Enable()
     end
     Core.Print("loaded. /monke for voice and options.")
 end
