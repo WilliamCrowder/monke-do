@@ -104,3 +104,27 @@ def test_group_line() -> None:
 def test_unknown_voice_is_an_error() -> None:
     with pytest.raises(ValueError):
         rules.task_for(obj("monster", "Hogger"), "pirate")
+
+
+def test_an_objective_with_its_own_wording_keeps_it() -> None:
+    # Real rows: Questie names the target, and the game shows the description instead.
+    row = {"type": "monster", "target_name": "Sentinel Shaya", "amount": 1, "amount_source": "default",
+           "text": "Heal and fortify Sentinel Shaya"}
+    assert rules.task_for(row, "monke") == "Do the thing: Heal and fortify Sentinel Shaya."
+    assert rules.task_for(row, "plain") == "Heal and fortify Sentinel Shaya."
+    row = {"type": "monster", "target_name": "Beaten Corpse", "amount": 1, "text": "Find Mankrik's Wife"}
+    assert rules.task_for(row, "monke") == "Do the thing: Find Mankrik's Wife."
+    # The name itself, or the game's default kill line, is not "own wording".
+    row = {"type": "monster", "target_name": "Kobold Vermin", "amount": 8, "text": "Kobold Vermin slain"}
+    assert rules.task_for(row, "monke") == "Bonk 8 Kobold Vermin."
+    row = {"type": "item", "target_name": "Red Silk Bandana", "amount": 10, "text": "Red Silk Bandana"}
+    assert rules.task_for(row, "plain") == "Collect 10 Red Silk Bandana."
+
+
+def test_turnin_wording_depends_on_who_takes_the_quest_in() -> None:
+    assert rules.turnin_line("Scout Riell", "monke", "giver") == "Go back to Scout Riell."
+    assert rules.turnin_line("Gryan Stoutmantle", "monke", "other") == "Go see Gryan Stoutmantle."
+    assert rules.turnin_line("Gryan Stoutmantle", "plain", "other") == "Go to Gryan Stoutmantle."
+    assert rules.turnin_line("Broken Barrel", "plain", "object") == "Go to Broken Barrel."
+    assert rules.turnin_line("Scout Riell", "plain", None) == "Return to Scout Riell."
+    assert rules.tasks_for([], "Darcy", "monke", "other") == ["Go see Darcy."]

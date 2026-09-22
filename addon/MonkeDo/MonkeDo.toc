@@ -8,7 +8,7 @@
 ## SavedVariables: MonkeDoDB
 ## OptionalDeps: LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0
 ## AddonCompartmentFunc: MonkeDo_OnAddonCompartmentClick
-## X-License: GPL-3.0-or-later
+## X-License: GPL-3.0-only
 ## X-Curse-Project-ID:
 ## X-Wago-ID:
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Callable
@@ -42,9 +43,22 @@ DEFAULT_BUILD = "1.60.1.69913"
 DEFAULT_FALLBACK_PRODUCT = "wow_classic_era"
 BASE_URL = "https://wago.tools"
 USER_AGENT = "MonkeDoPipeline/0.1"
-MIN_INTERVAL = 1.0  # seconds between requests to wago.tools
+MIN_INTERVAL = 2.0  # seconds between requests to wago.tools, like every other fetcher here
 TABLES = ("QuestV2", "QuestObjective", "QuestV2CliTask")
 BOM = chr(0xFEFF)  # some CSV exports start with a byte order mark
+# A game build looks like 1.60.1.69913. Anything else is refused before it becomes a URL
+# parameter or a cache directory name (the build list is downloaded data).
+BUILD_RE = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,7}")
+# An absent table is asked for again after this long, not on every run.
+ABSENT_RECHECK_SECONDS = 24 * 3600
+
+
+class Refused(RuntimeError):
+    """wago.tools answered 403 or 429: stop this source rather than ask again."""
+
+
+def is_build(value: object) -> bool:
+    return isinstance(value, str) and BUILD_RE.fullmatch(value) is not None
 
 # QuestObjective.Type -> the in-game objective type strings of the contract.
 # Numbers as in TrinityCore's QuestObjectiveType. Anything not listed is "event".
@@ -108,7 +122,7 @@ class ThrottledFetch:
 def looks_like_csv(text: str) -> bool:
     """wago answers a missing table with JSON (and sometimes an HTML error page)
     while still using a success status, so the body has to be looked at."""
-    head = text.lstrip()[:200]
+    head = text.lstrip(BOM).lstrip()[:200]
     if not head or head[0] in "{[<":
         return False
     header = head.splitlines()[0]
@@ -123,21 +137,32 @@ def table_csv(
     A build's table never changes, so a cached copy is always used. An absent table
     is asked for again on the next online run: that is how Forever will show up.
     """
+    if not is_build(build):
+        raise ValueError(f"not a game build: {build!r}")
     path = cache_dir / build / f"{table}.csv"
+    absent = cache_dir / build / f"{table}.absent"
     if path.exists():
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8").lstrip(BOM)
     if offline:
         notes.append(f"{table} for build {build}: not in the cache (offline)")
         return None
+    if absent.exists() and time.time() - absent.stat().st_mtime < ABSENT_RECHECK_SECONDS:
+        notes.append(f"{table} for build {build}: absent at the last check; asked again in a day")
+        return None
     reply = fetch(f"{BASE_URL}/db2/{table}/csv?build={build}")
+    if reply.status in (403, 429):
+        raise Refused(f"wago.tools answered HTTP {reply.status} for {table}; stopping the wago source")
     if reply.status != 200 or not looks_like_csv(reply.text):
         body = " ".join(reply.text.split())
         reason = "an HTML page" if body.startswith("<") else body[:80]
         notes.append(f"{table} for build {build}: table absent (HTTP {reply.status}: {reason})")
+        absent.parent.mkdir(parents=True, exist_ok=True)
+        absent.write_text(f"HTTP {reply.status}" + chr(10), encoding="utf-8")
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(reply.text, encoding="utf-8")
-    return reply.text
+    text = reply.text.lstrip(BOM)
+    path.write_text(text, encoding="utf-8")
+    return text
 
 
 def _version_key(version: str) -> tuple[int, ...]:
@@ -149,24 +174,27 @@ def newest_build(
 ) -> str | None:
     """Newest version of `product` from wago's build list (product -> [{version, ...}])."""
     path = cache_dir / "builds.json"
-    if offline:
+    fresh = path.exists() and time.time() - path.stat().st_mtime < ABSENT_RECHECK_SECONDS
+    if offline or fresh:
         if not path.exists():
             notes.append("build list not in the cache (offline); no fallback build")
             return None
         text = path.read_text(encoding="utf-8")
     else:
         reply = fetch(f"{BASE_URL}/api/builds")
+        if reply.status in (403, 429):
+            raise Refused(f"wago.tools answered HTTP {reply.status} for the build list; stopping the wago source")
         if reply.status != 200:
             notes.append(f"build list: HTTP {reply.status}; no fallback build")
             return None
         text = reply.text
     try:
         builds = json.loads(text)
-        versions = [b["version"] for b in builds.get(product, []) if isinstance(b.get("version"), str)]
+        versions = [b["version"] for b in builds.get(product, []) if is_build(b.get("version"))]
     except (ValueError, AttributeError, TypeError, KeyError):
         notes.append("build list: unexpected format; no fallback build")
         return None
-    if not offline:
+    if not (offline or fresh):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     if not versions:

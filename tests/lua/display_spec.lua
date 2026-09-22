@@ -14,7 +14,7 @@ describe("Display", function()
 
     before_each(function()
         WowStubs.reset()
-        MonkeDB = { [214] = RECORD_214 }
+        _G.MonkeDB = { [214] = RECORD_214 }
         ns = WowStubs.load()
         WowStubs.login()
     end)
@@ -47,6 +47,25 @@ describe("Display", function()
         assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
     end)
 
+    it("restores the original even when Monke Do had emptied the description", function()
+        ns.Core.Set("showLore", false) -- no lore and no group line: the description becomes ""
+        WowStubs.showQuest("detail")
+        assert.is_nil(QuestInfoDescriptionText:GetText())
+        ns.Core.ToggleOriginal()
+        assert.are.equal(WowStubs.quest.description, QuestInfoDescriptionText:GetText())
+        ns.Core.ToggleOriginal()
+        assert.is_nil(QuestInfoDescriptionText:GetText())
+    end)
+
+    it("shows the DB bullets on the quest giver page before the quest is in the log", function()
+        WowStubs.quest.objectives = {}
+        WowStubs.quest.onQuest = false
+        WowStubs.showQuest("detail")
+        assert.are.equal(
+            BULLET .. "Grab 10 Red Silk Bandana.\n" .. BULLET .. "Go back to Scout Riell.\n\nMonke get: 875 XP, 4s",
+            QuestInfoObjectivesText:GetText())
+    end)
+
     it("stays on the original text for the next quest while toggled off", function()
         ns.Core.ToggleOriginal()
         WowStubs.showQuest("detail")
@@ -66,7 +85,7 @@ describe("Display", function()
     end)
 
     it("renders rule-based bullets and keeps Blizzard lore for a quest with no DB entry", function()
-        MonkeDB = {}
+        _G.MonkeDB = {}
         WowStubs.showQuest("detail")
         assert.are.equal("Lore not yet translated.\n\n" .. WowStubs.quest.description, QuestInfoDescriptionText:GetText())
         assert.are.equal(
@@ -75,14 +94,14 @@ describe("Display", function()
     end)
 
     it("does not stack the no-lore notice when the same page refreshes", function()
-        MonkeDB = {}
+        _G.MonkeDB = {}
         WowStubs.showQuest("detail")
         ns.Core.Set("groupWarning", false) -- any setting change redraws
         assert.are.equal("Lore not yet translated.\n\n" .. WowStubs.quest.description, QuestInfoDescriptionText:GetText())
     end)
 
     it("does not break with no database at all", function()
-        MonkeDB = nil
+        _G.MonkeDB = nil
         assert.has_no.errors(function() WowStubs.showQuest("detail") end)
     end)
 
@@ -153,12 +172,12 @@ describe("Display", function()
     it("hooking QuestInfo_ShowDescriptionText would never fire, which is why QuestInfo_Display is hooked", function()
         -- Blizzard's templates capture the element functions when the file loads.
         local fired = 0
-        QuestInfo_ShowDescriptionText = function() end
+        _G.QuestInfo_ShowDescriptionText = function() end
         local captured = QuestInfo_ShowDescriptionText
         hooksecurefunc("QuestInfo_ShowDescriptionText", function() fired = fired + 1 end)
         captured()
         assert.are.equal(0, fired)
-        QuestInfo_ShowDescriptionText = nil
+        _G.QuestInfo_ShowDescriptionText = nil
     end)
 
     it("says so when Immersion owns the quest window", function()
@@ -175,9 +194,9 @@ describe("Display", function()
 
     it("survives a client with none of the quest frame globals", function()
         WowStubs.reset()
-        QuestInfo_Display, QuestFrame, QuestFrameProgressPanel, QuestMapFrame = nil, nil, nil, nil
-        QuestInfoDescriptionText, QuestInfoObjectivesText, QuestInfoRewardText, QuestProgressText = nil, nil, nil, nil
-        C_QuestLog = nil
+        _G.QuestInfo_Display, _G.QuestFrame, _G.QuestFrameProgressPanel, _G.QuestMapFrame = nil, nil, nil, nil
+        _G.QuestInfoDescriptionText, _G.QuestInfoObjectivesText, _G.QuestInfoRewardText, _G.QuestProgressText = nil, nil, nil, nil
+        _G.C_QuestLog = nil
         ns = WowStubs.load()
         assert.has_no.errors(WowStubs.login)
         assert.has_no.errors(ns.Display.Refresh)
@@ -196,7 +215,7 @@ describe("Tracker", function()
     end
 
     local function installTracker(trackerBlock)
-        QuestObjectiveTracker = {
+        _G.QuestObjectiveTracker = {
             UpdateSingle = function() end,
             GetExistingBlock = function() return trackerBlock end,
             MarkDirty = function(self) self.dirty = (self.dirty or 0) + 1 end,
@@ -263,7 +282,7 @@ describe("globals", function()
     it("the addon only touches globals declared in .luacheckrc", function()
         local seen = WowStubs.trackGlobals(function()
             WowStubs.reset()
-            MonkeDB = nil
+            _G.MonkeDB = nil
             local ns = WowStubs.load()
             WowStubs.login()
             WowStubs.showQuest("detail")

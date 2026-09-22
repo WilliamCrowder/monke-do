@@ -38,6 +38,7 @@ MonkeDB = {
 | `t` | list of strings | no | Ordered task bullets in monke voice. No progress counts, no bullet glyphs. |
 | `n` | integer | no (default 0) | How many leading entries of `t` map 1:1, in order, to the quest's live objectives. |
 | `e` | string | no | Turn-in NPC name ("end"), when a source gives one. |
+| `d` | boolean | no (default false) | True when `e` is not the quest giver (a different NPC, or an object such as a mailbox): "Go see" / "Go to" rather than "Go back to" / "Return to". |
 | `g` | string or nil | no | Group line in monke voice. |
 | `v` | integer | yes | Schema version. Currently `3`. |
 
@@ -53,8 +54,10 @@ A record with neither `l` nor `t` is never exported.
 3. Live progress such as `(3/15)` is appended to objective bullets only, and
    always comes from `C_QuestLog.GetQuestObjectives`, never from the DB.
 4. Trailing bullets: monke voice appends `t[n+1..#t]` (hints, then the turn-in
-   line last). Plain voice appends a rule-based turn-in line using `e`.
-   With no record, both voices append a generic turn-in line.
+   line last). Plain voice appends a rule-based turn-in line using `e` and `d`.
+   With no record, both voices append a generic turn-in line. When the game
+   reports no objectives at all (a quest that is offered but not yet accepted),
+   monke voice shows `t[1..n]` as they are, without progress.
 5. Group line: shown when the suggested group size is above 1 or the quest tag
    is Elite, Group, Dungeon or Raid. Monke voice uses `g` when present, else
    the `Voice.lua` template.
@@ -92,11 +95,13 @@ from, or `"unknown"`.
 
 ### `quests` and `source_rows` row shape
 
-`id, title, detail, objectives_text, progress, complete, turnin_npc, source,
-fetched_at, text_hash`
+`id, title, detail, objectives_text, progress, complete, turnin_npc, turnin_kind,
+source, fetched_at, text_hash`
 
 - `detail` is the long description. `objectives_text` is the short summary.
   `progress` is the "not done yet" text, `complete` the turn-in reward text.
+- `turnin_kind` is `giver` (an NPC who also offers the quest), `other` (a
+  different NPC), `object`, or `NULL` when unknown. It travels with `turnin_npc`.
 - Missing fields are `NULL`, never empty strings.
 - `fetched_at` is UTC ISO 8601.
 - `text_hash` is the first 16 hex characters of SHA-256 over
@@ -195,7 +200,18 @@ most 2 retries, then the quest falls back to rule-based tasks only:
 The group size counts the player: size 3 is "Bring 2 friends" in both
 `Voice.lua` and `pipeline/rules.py`.
 
-Cache key: `(quest_id, text_hash, prompt_version)`.
+Cache key: `(quest_id, text_hash, prompt_version)`. Each row also stores a
+fingerprint of the full context the writer saw (text, objectives, turn-in, group
+data). A row whose fingerprint no longer matches is stale: the summarizer
+requests it again and the exporter falls back to rule-based tasks.
+
+An objective line in the request may carry `text: ...`, the objective's own
+wording ("Heal and fortify Sentinel Shaya" on a `monster` objective). Its bullet
+is then `Do the thing: {text}.`, never the type's verb; `pipeline/rules.py` and
+`Rules.lua` build the same.
+
+`Turn-in NPC:` may say `(not the quest giver)` or `(an object, not a person)`;
+the turn-in line is then `Go see {npc}.` rather than `Go back to {npc}.`.
 
 ## 7. Addon modules
 
@@ -233,4 +249,11 @@ These correct assumptions in the build plan. Workers rely on these, not the plan
   frame globals, `C_QuestLog.GetQuestObjectives`, `GetSuggestedGroupSize`,
   `QuestObjectiveTracker` and `AddonCompartmentFrame` exist.
 - The BigWigs packager maps interface `16???` to game type `forever`
-  (alias `camelot`, TOC suffix `_Camelot`).
+  (alias `camelot`, TOC suffix `_Camelot`). It packages tracked files only.
+- Real busted sandboxes each spec file: a bare global assignment in a spec never
+  reaches the addon. Specs write through `_G.`; `tests/lua/mini_busted.lua` does
+  the same so the local runner catches it.
+- `FontString:GetText()` returns nil for an empty string on the real client.
+- Questie's `startedBy`/`finishedBy` tell a delivery quest from a return trip:
+  1,796 of 4,244 vanilla quests are handed in to someone other than the giver
+  (1,591) or to an object (205).

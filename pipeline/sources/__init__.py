@@ -79,4 +79,10 @@ def load_all(
             result.notes.append(f"FAILED: {type(error).__name__}: {error}")
         results.append(result)
     db.resolve_quests(conn)
+    from pipeline.sources.questie import infer_amounts  # local: the registry imports lazily
+
+    reconciled = db.reconcile_amounts(conn, infer_amounts)
+    if reconciled:
+        results[-1].notes.append(f"{reconciled} objective counts re-read from a winning sentence")
+    conn.commit()
     return results

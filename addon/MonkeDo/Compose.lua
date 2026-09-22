@@ -42,32 +42,63 @@ function Compose.UsableRecord(record)
             end
         end
     end
+    if record.n ~= nil then
+        if type(record.n) ~= "number" or record.n < 0 or record.n > #(record.t or {}) then
+            return nil
+        end
+    end
     return record
 end
 
--- 0 = this DB line cannot be this objective, 1 = plausible, 2 = names it.
-local function score(line, objective)
-    local name, _, parsedNeed = Rules.ParseObjectiveText(objective.text)
-    local need = objective.numRequired or parsedNeed
-    if need and need > 1 then
-        local found = false
-        for number in line:gmatch("%d+") do
-            if tonumber(number) == need then
-                found = true
-            end
+-- Does `needle` occur in `haystack` as whole words? Plain find, then a look at the
+-- characters either side, so "Rockjaw Trogg" is not found inside "Burly Rockjaw Trogg"
+-- and "Ore" is not found inside "Orebender".
+local function containsWords(haystack, needle)
+    local from = 1
+    while true do
+        local i, j = haystack:find(needle, from, true)
+        if not i then
+            return false
         end
-        if not found then
-            return 0
+        local before = i > 1 and haystack:sub(i - 1, i - 1) or " "
+        local after = haystack:sub(j + 1, j + 1)
+        if not before:match("[%w']") and not after:match("[%w]") then
+            return true
+        end
+        from = i + 1
+    end
+end
+
+-- What a live objective is called, lower case, for matching against DB lines.
+local function needleOf(objective)
+    local name = Rules.ParseObjectiveText(objective.text)
+    return stripFinalStop(name):lower()
+end
+
+-- 0 = this DB line cannot be this objective, 1 = plausible, 2 = names it.
+local function score(line, objective, needle)
+    if Rules.COUNTED[objective.type] then
+        local _, _, parsedNeed = Rules.ParseObjectiveText(objective.text)
+        local need = objective.numRequired or parsedNeed
+        if need and need > 1 then
+            local found = false
+            for number in line:gmatch("%d+") do
+                if tonumber(number) == need then
+                    found = true
+                end
+            end
+            if not found then
+                return 0
+            end
         end
     end
     local haystack = line:lower()
-    local needle = stripFinalStop(name):lower()
     if needle ~= "" then
-        if haystack:find(needle, 1, true) then
+        if containsWords(haystack, needle) then
             return 2
         end
         local singular = needle:gsub("s$", "")
-        if singular ~= "" and haystack:find(singular, 1, true) then
+        if singular ~= needle and containsWords(haystack, singular) then
             return 2
         end
     end
@@ -75,34 +106,99 @@ local function score(line, objective)
 end
 
 -- The pipeline orders t[1..n] like the game's objectives, but the two orders come from
--- different data. Check every pairing against the live objective and give up (rule-based
--- bullets) rather than show "Bonk 8 Kobold (3/10)".
+-- different data. Pair every DB line with a live objective by name and count first, take
+-- the same-position line only when nothing contradicts it, and give up (rule-based
+-- bullets) rather than show "Bonk 8 Kobold (3/10)" or progress on the wrong line.
 local function assign(lines, n, live)
-    local used, order = {}, {}
+    local needles, scores = {}, {}
     for i, objective in ipairs(live) do
-        local best, bestScore = nil, 0
-        local candidates = { i }
+        needles[i] = needleOf(objective)
+        scores[i] = {}
         for j = 1, n do
-            if j ~= i then
-                candidates[#candidates + 1] = j
+            scores[i][j] = score(lines[j], objective, needles[i])
+        end
+    end
+
+    local used, order = {}, {}
+    -- Pass 1: lines that name an objective, longest name first so "Burly Rockjaw Trogg"
+    -- takes its line before "Rockjaw Trogg" looks.
+    local byLength = {}
+    for i = 1, #live do
+        byLength[i] = i
+    end
+    table.sort(byLength, function(a, b)
+        if #needles[a] ~= #needles[b] then
+            return #needles[a] > #needles[b]
+        end
+        return a < b
+    end)
+    for _, i in ipairs(byLength) do
+        local named = {}
+        for j = 1, n do
+            if not used[j] and scores[i][j] == 2 then
+                named[#named + 1] = j
             end
         end
-        for _, j in ipairs(candidates) do
-            if not used[j] and lines[j] then
-                local s = score(lines[j], objective)
-                if j ~= i and s < 2 then
-                    s = 0 -- a line in the wrong position has to name the objective
-                end
-                if s > bestScore then
-                    best, bestScore = j, s
+        if #named == 1 then
+            used[named[1]] = true
+            order[i] = named[1]
+        elseif #named > 1 then
+            local same = false
+            for _, j in ipairs(named) do
+                if j == i then
+                    same = true
                 end
             end
+            if not same then
+                return nil
+            end
+            used[i] = true
+            order[i] = i
         end
-        if not best then
-            return nil
+    end
+    -- Pass 2: the rest keep their position, but only when that line names no live
+    -- objective and nothing rules it out.
+    local unbound = {}
+    for i = 1, #live do
+        if not order[i] then
+            local positional = not used[i] and scores[i][i] >= 1
+            for k = 1, #live do
+                if k ~= i and scores[k][i] == 2 then
+                    positional = false
+                end
+            end
+            if positional then
+                used[i] = true
+                order[i] = i
+            else
+                unbound[#unbound + 1] = i
+            end
         end
-        used[best] = true
-        order[i] = best
+    end
+    -- Pass 3: one objective and one line left is not a guess, unless that line names
+    -- some other objective.
+    if #unbound == 1 then
+        local i = unbound[1]
+        local free
+        for j = 1, n do
+            if not used[j] then
+                free = free and -1 or j
+            end
+        end
+        local clean = free and free > 0 and scores[i][free] >= 1
+        for k = 1, #live do
+            if clean and k ~= i and scores[k][free] == 2 then
+                clean = false
+            end
+        end
+        if clean then
+            used[free] = true
+            order[i] = free
+            unbound = {}
+        end
+    end
+    if #unbound > 0 then
+        return nil
     end
     return order
 end
@@ -208,12 +304,21 @@ function Compose.Build(input)
 
     local n = record and record.t and (record.n or 0) or 0
     local lines
-    if voice == "monke" and record and record.t and n > 0 and n == #live then
-        local order = assign(record.t, n, live)
-        if order then
+    if voice == "monke" and record and record.t and n > 0 then
+        if #live == 0 then
+            -- Offered but not yet accepted, or not loaded yet: nothing to pair with, so the
+            -- DB bullets stand on their own.
             lines = {}
             for i = 1, n do
-                lines[i] = record.t[order[i]]
+                lines[i] = record.t[i]
+            end
+        elseif n == #live then
+            local order = assign(record.t, n, live)
+            if order then
+                lines = {}
+                for i = 1, n do
+                    lines[i] = record.t[order[i]]
+                end
             end
         end
     end
@@ -234,7 +339,7 @@ function Compose.Build(input)
             out.tasks[#out.tasks + 1] = record.t[i]
         end
     else
-        out.tasks[#out.tasks + 1] = Rules.TurnIn(record and record.e, voice)
+        out.tasks[#out.tasks + 1] = Rules.TurnIn(record and record.e, voice, record and record.d == true)
     end
 
     out.rewards = Compose.RewardsLine(input.rewards, voice)

@@ -51,9 +51,15 @@ def test_build_not_on_wago_falls_back_to_classic_era_ids(tmp_path):
     notes = "\n".join(result.notes)
     assert notes.count("table absent") == 3 and "Table not found." in notes
     assert f"quest IDs come from wow_classic_era {ERA} instead" in notes
-    # Only real CSV is cached, under <build>/<Table>.csv. The "not found" JSON is not.
+    # Only real CSV is cached, under <build>/<Table>.csv. An absent table leaves a marker
+    # so it is not asked for again on every run.
     assert (tmp_path / "wago" / ERA / "QuestV2.csv").exists()
-    assert not (tmp_path / "wago" / FOREVER).exists()
+    assert sorted(p.name for p in (tmp_path / "wago" / FOREVER).iterdir()) == [
+        "QuestObjective.absent", "QuestV2.absent", "QuestV2CliTask.absent"]
+
+    again = wago.load(db.connect(), tmp_path, fetch=fake)  # a second run within a day
+    assert fake.urls[5:] == []  # nothing was asked for again
+    assert sum("asked again in a day" in n for n in again.notes) == 3
     assert (tmp_path / "wago" / "builds.json").exists()
 
 
@@ -171,5 +177,29 @@ def test_http_errors_count_as_absent(tmp_path):
     assert any("HTTP 404: Not Found" in note for note in result.notes)
     assert any("HTTP 404: an HTML page" in note for note in result.notes)
     assert any("HTTP 200: {" in note for note in result.notes)
-    assert not (tmp_path / "wago" / FOREVER).exists()
     assert any("build list: HTTP 500" in note for note in result.notes)
+    assert not (tmp_path / "wago" / FOREVER / "QuestV2.csv").exists()
+
+
+def test_refusals_stop_the_source_instead_of_counting_as_absent(tmp_path):
+    fake = FakeWago({_csv_url("QuestV2", FOREVER): wago.Reply(429, "slow down")})
+    with pytest.raises(wago.Refused, match="429"):
+        wago.load(db.connect(), tmp_path, fetch=fake)
+    assert fake.urls == [_csv_url("QuestV2", FOREVER)]  # nothing after the refusal
+
+
+def test_build_strings_are_validated_before_they_become_paths(tmp_path):
+    with pytest.raises(ValueError, match="not a game build"):
+        wago.load(db.connect(), tmp_path, build="9.9.9.9/../../escaped", fetch=FakeWago({}))
+    fake = FakeWago({
+        _csv_url("QuestV2", FOREVER): wago.Reply(404, "no"),
+        "https://wago.tools/api/builds": wago.Reply(200, '{"wow_classic_era": [{"version": "9.9.9.99999/../../out"}]}'),
+    })
+    result = wago.load(db.connect(), tmp_path, fetch=fake)
+    assert any("no product" in n or "no fallback" in n for n in result.notes)
+    assert not any("escaped" in str(p) or "out" == p.name for p in tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize("body", [wago.BOM + "ID,UniqueBitFlag" + chr(10) + "1,2", "ID,UniqueBitFlag" + chr(10) + "1,2"])
+def test_a_byte_order_mark_does_not_hide_a_csv(body):
+    assert wago.looks_like_csv(body)

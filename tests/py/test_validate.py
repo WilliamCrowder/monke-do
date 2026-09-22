@@ -342,3 +342,65 @@ def test_load_context_from_db() -> None:
     assert ctx.has_prose()
     with pytest.raises(KeyError):
         load_context(conn, 999)
+
+
+# ---------------------------------------------------------------- false rejections seen on real quests
+
+
+def _ctx(**kwargs) -> QuestContext:
+    base = dict(id=1, title="A Quest", objectives_text="Do the thing.", turnin_npc="Bob", objectives=[])
+    base.update(kwargs)
+    return QuestContext(**base)
+
+
+def _summary(lore: str, tasks: list[str] | None = None) -> dict:
+    return {"lore_monke": lore, "lore_plain": lore, "tasks": tasks or ["Go back to Bob."], "group_line": None}
+
+
+def test_a_full_stop_inside_a_game_name_is_not_a_sentence_end() -> None:
+    ctx = _ctx(objectives_text="Kill 14 Venture Co. Workers for Morin.", objectives=[
+        {"type": "monster", "target_name": "Venture Co. Worker", "amount": 14, "amount_source": "text"}])
+    lore = "Morin at the village wants 14 Venture Co. Workers killed."
+    assert validate(_summary(lore, ["Bonk 14 Venture Co. Worker.", "Go back to Bob."]), ctx) == []
+
+
+def test_a_blocklisted_word_that_is_part_of_a_game_name_passes() -> None:
+    ctx = _ctx(title="The Temple", objectives_text="Speak with Godrick Farsan in the Temple of the Damned.",
+               turnin_npc="Godrick Farsan")
+    lore = "Godrick Farsan wait in Temple of the Damned. Monke go talk."
+    assert validate(_summary(lore, ["Go back to Godrick Farsan."]), ctx) == []
+    assert validate(_summary("These kobolds are damned annoying."), _ctx()) != []
+
+
+def test_quoted_speech_may_start_with_a_capital() -> None:
+    ctx = _ctx(objectives_text="Farmer Saldean wants 20 Harvest Watchers killed.", turnin_npc="Farmer Saldean")
+    lore = 'Farmer Saldean say "Please kill 20 Harvest Watchers." Monke bonk!'
+    assert validate(_summary(lore, ["Go back to Farmer Saldean."]), ctx) == []
+
+
+def test_no_as_a_word_is_not_an_abbreviation() -> None:
+    lore = "Kobolds say no. Monke bonk 10 Kobold Vermin. Bob happy."
+    assert any("3 sentences" in e for e in validate(_summary(lore), _ctx()))
+
+
+@pytest.mark.parametrize("task", [
+    "Bonk 10 Kobold Vermin (0 of 10).", "Bonk 10 Kobold Vermin (0 out of 10).",
+    "(1) Bonk 10 Kobold Vermin.", "1) Bonk 10 Kobold Vermin.", "a. Bonk 10 Kobold Vermin.",
+    "[ ] Bonk 10 Kobold Vermin.", "\u2192 Bonk 10 Kobold Vermin.",
+])
+def test_more_progress_and_list_marker_shapes_are_rejected(task: str) -> None:
+    ctx = _ctx(objectives=[{"type": "monster", "target_name": "Kobold Vermin", "amount": 10, "amount_source": "text"}])
+    assert validate(_summary("Bonk kobolds.", [task, "Go back to Bob."]), ctx) != []
+    assert validate(_summary("Bonk kobolds.", ["Bonk 10 Kobold Vermin.", "Go back to Bob."]), ctx) == []
+
+
+def test_a_delivery_quest_must_not_say_go_back() -> None:
+    ctx = _ctx(turnin_npc="Gryan Stoutmantle", turnin_kind="other",
+               objectives_text="Take the note to Gryan Stoutmantle in Westfall.")
+    ok = _summary("Bring the note to Gryan Stoutmantle.", ["Go see Gryan Stoutmantle."])
+    assert validate(ok, ctx) == []
+    bad = _summary("Bring the note to Gryan Stoutmantle.", ["Go back to Gryan Stoutmantle."])
+    assert any("Go see" in e for e in validate(bad, ctx))
+    giver = _ctx(turnin_npc="Gryan Stoutmantle", turnin_kind="giver",
+                 objectives_text="Take the note to Gryan Stoutmantle in Westfall.")
+    assert validate(bad, giver) == []

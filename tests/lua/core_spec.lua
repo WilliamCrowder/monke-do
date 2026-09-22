@@ -20,7 +20,7 @@ describe("Core", function()
 
     describe("settings", function()
         it("default sanely when SavedVariables never loaded", function()
-            MonkeDoDB = nil
+            _G.MonkeDoDB = nil
             WowStubs.login()
             assert.are.equal("monke", Core.Get("voice"))
             assert.is_true(Core.Get("showLore"))
@@ -29,7 +29,7 @@ describe("Core", function()
             assert.are.same({ hide = false }, Core.Get("minimap"))
         end)
         it("keep saved values and repair bad ones", function()
-            MonkeDoDB = { voice = "plain", showLore = false, groupWarning = "yes", minimap = 7 }
+            _G.MonkeDoDB = { voice = "plain", showLore = false, groupWarning = "yes", minimap = 7 }
             WowStubs.login()
             assert.are.equal("plain", Core.Get("voice"))
             assert.is_false(Core.Get("showLore"))
@@ -37,7 +37,7 @@ describe("Core", function()
             assert.are.same({ hide = false }, Core.Get("minimap"))
         end)
         it("reject an unknown voice", function()
-            MonkeDoDB = { voice = "klingon" }
+            _G.MonkeDoDB = { voice = "klingon" }
             WowStubs.login()
             assert.are.equal("monke", Core.Get("voice"))
         end)
@@ -45,7 +45,7 @@ describe("Core", function()
             assert.are.equal("monke", Core.Get("voice"))
         end)
         it("ignore ADDON_LOADED for other addons", function()
-            MonkeDoDB = nil
+            _G.MonkeDoDB = nil
             WowStubs.fire("ADDON_LOADED", "SomeOtherAddon")
             assert.is_nil(MonkeDoDB)
         end)
@@ -85,7 +85,7 @@ describe("Core", function()
             assert.is_false(Core.Get("tracker"))
         end)
         it("/monke version reports the database", function()
-            MonkeDB_Meta = { build = "1.60.1.69913", generated = "2026-10-01", count = 3120 }
+            _G.MonkeDB_Meta = { build = "1.60.1.69913", generated = "2026-10-01", count = 3120 }
             SlashCmdList["MONKEDO"]("version")
             assert.is_true(printedContains("v1.2.3, 3120 quests, game build 1.60.1.69913, generated 2026-10-01"))
         end)
@@ -123,7 +123,7 @@ describe("Core", function()
             assert.are.equal(42, WowStubs.openedCategory)
         end)
         it("a broken Settings API does not stop login", function()
-            Settings = {
+            _G.Settings = {
                 RegisterVerticalLayoutCategory = function() error("changed in a hotfix") end,
                 RegisterAddOnSetting = function() end,
             }
@@ -136,7 +136,7 @@ describe("Core", function()
     describe("GetRecord", function()
         it("finds a record and copes with a missing database", function()
             assert.is_nil(Core.GetRecord(214))
-            MonkeDB = { [214] = { l = "x", v = 3 } }
+            _G.MonkeDB = { [214] = { l = "x", v = 3 } }
             assert.are.equal("x", Core.GetRecord(214).l)
             assert.is_nil(Core.GetRecord(215))
             assert.is_nil(Core.GetRecord("214"))

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pipeline import db, rules
 from pipeline.llm.summarize import get_summary
+from pipeline.validate import load_context
 
 _SOURCE_FIELDS = (("Detail", "detail"), ("Objectives text", "objectives_text"),
                   ("Progress", "progress"), ("Complete", "complete"))
@@ -62,9 +63,11 @@ def _summary_of(row: sqlite3.Row | None) -> dict:
 
 def render_quest(conn: sqlite3.Connection, quest: sqlite3.Row, prompt_version: str) -> str:
     """One quest as a markdown section: source text first, then what players would read."""
-    row = get_summary(conn, quest["id"], quest["text_hash"], prompt_version)
+    ctx = load_context(conn, quest)
+    # Same staleness rule as export.write, so the file shows what players would get.
+    row = get_summary(conn, quest["id"], quest["text_hash"], prompt_version, ctx.fingerprint())
     summary = _summary_of(row)
-    objectives = db.get_objectives(conn, quest["id"])
+    objectives = ctx.objectives
     out = [f"## {quest['id']}: {quest['title'] or '(untitled)'}", ""]
     out += [f"- Validator status: {_status_line(row)}",
             f"- Source: {quest['source']}; turn-in NPC: {quest['turnin_npc'] or 'unknown'}"]

@@ -168,6 +168,14 @@ assert = setmetatable(lib, {
     end,
 })
 
+-- Real busted runs each spec file in a sandbox: reads fall through to _G, but a bare
+-- global assignment lands in a private table the addon never sees. Do the same here, so a
+-- spec that forgets to write through _G fails on this machine and not only in CI.
+local function sandboxed(chunk)
+    setfenv(chunk, setmetatable({}, { __index = _G }))
+    return chunk
+end
+
 function MiniBusted.runFiles(paths)
     for _, path in ipairs(paths) do
         local chunk, err = loadfile(path)
@@ -175,7 +183,7 @@ function MiniBusted.runFiles(paths)
             MiniBusted.failed = MiniBusted.failed + 1
             MiniBusted.failures[#MiniBusted.failures + 1] = path .. "\n" .. tostring(err)
         else
-            chunk()
+            sandboxed(chunk)()
         end
     end
     for _, failure in ipairs(MiniBusted.failures) do

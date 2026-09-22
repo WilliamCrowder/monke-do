@@ -126,16 +126,18 @@ end
 
 -- Swap a fontstring's text, remembering Blizzard's string so the toggle can put it back
 -- byte for byte without asking the server again.
+-- GetText() answers nil for an empty string on the real client, so everything is compared
+-- as strings.
 local function swap(fontString, newText)
     if not (fontString and fontString.GetText and fontString.SetText) then
         return
     end
-    local current = fontString:GetText()
-    if current ~= fontString.monkeText then
+    local current = fontString:GetText() or ""
+    if fontString.monkeText == nil or current ~= fontString.monkeText then
         fontString.monkeOriginal = current -- Blizzard wrote a fresh string since our last swap
     end
     if ns.state.showOriginal or newText == nil then
-        if fontString.monkeOriginal ~= nil and current ~= fontString.monkeOriginal then
+        if fontString.monkeText ~= nil and current ~= fontString.monkeOriginal then
             fontString:SetText(fontString.monkeOriginal)
         end
         fontString.monkeText = nil
@@ -172,9 +174,10 @@ function Display.ApplyQuestInfo()
 
     local description = QuestInfoDescriptionText
     if shown(description) then
+        local current = description:GetText() or ""
         local original = description.monkeOriginal
-        if description:GetText() ~= description.monkeText then
-            original = description:GetText()
+        if description.monkeText == nil or current ~= description.monkeText then
+            original = current
         end
         swap(description, Compose.DescriptionText(sections, original))
     end

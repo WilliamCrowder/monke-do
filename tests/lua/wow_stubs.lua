@@ -39,6 +39,9 @@ end
 local function newFontString(text)
     local fs = { text = text, shown = true }
     function fs:GetText()
+        if self.text == "" then
+            return nil -- the real client answers nil for an empty string
+        end
         return self.text
     end
     function fs:SetText(value)

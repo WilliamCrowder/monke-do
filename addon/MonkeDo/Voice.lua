@@ -23,6 +23,7 @@ local STRINGS = {
         reputation = "Make {faction} like ape.",
         reputation_unknown = "Make {faction} like ape.",
         turnin = "Go back to {npc}.",
+        turnin_other = "Go see {npc}.",
         turnin_unknown = "Go back. Get shiny.",
         done = "(done)",
         -- sections
@@ -53,6 +54,7 @@ local STRINGS = {
         reputation = "Reach {standing} with {faction}.",
         reputation_unknown = "Earn reputation with {faction}.",
         turnin = "Return to {npc}.",
+        turnin_other = "Go to {npc}.",
         turnin_unknown = "Turn in the quest.",
         done = "(done)",
         group = "Suggested group: {n} players.",

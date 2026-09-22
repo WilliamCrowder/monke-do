@@ -35,6 +35,9 @@ _STANDING_RE = re.compile(r"\b(" + "|".join(STANDINGS) + r")\b", re.IGNORECASE)
 _GENERIC_TASK = {MONKE: "Do the quest thing.", PLAIN: "Complete the objective."}
 _TURNIN_GENERIC = {MONKE: "Go back. Get shiny.", PLAIN: "Turn in the quest."}
 _TURNIN_NPC = {MONKE: "Go back to {npc}.", PLAIN: "Return to {npc}."}
+# The quest is handed in somewhere the player has not been sent back to: a different NPC,
+# or an object such as a mailbox. Mirrors Voice.lua "turnin_other".
+_TURNIN_OTHER = {MONKE: "Go see {npc}.", PLAIN: "Go to {npc}."}
 
 # Quest tags that mean "do not try this alone" even without a suggested size.
 _TAG_LINES = {
@@ -103,6 +106,18 @@ def _reputation_task(row: Any, voice: str) -> str:
     return f"Earn reputation with {faction}."
 
 
+def has_own_wording(objective_row: Any) -> bool:
+    """True when the source gave the objective a description that is not just its target's
+    name: "Heal and fortify Sentinel Shaya" on a monster objective means the guard is not
+    something to bonk. The game shows that wording as the objective line, and the addon
+    (Rules.lua) keeps it too, so the exported bullet must match."""
+    name = _clean(field(objective_row, "target_name")).casefold()
+    text = _clean(field(objective_row, "text")).casefold()
+    if not text:
+        return False
+    return text not in (name, name + " slain", name + "s slain")
+
+
 def task_for(objective_row: Any, voice: str) -> str:
     """One bullet for one structured objective, in the given voice."""
     _check_voice(voice)
@@ -111,29 +126,36 @@ def task_for(objective_row: Any, voice: str) -> str:
     text = _clean(field(objective_row, "text"))
     if kind == "reputation":
         return _reputation_task(objective_row, voice)
-    if kind in _VERBS and name:
+    if kind in _VERBS and name and not has_own_wording(objective_row):
         verb = _VERBS[kind][VOICES.index(voice)]
         n = _amount(objective_row)
         return f"{verb} {n} {name}." if n > 1 else f"{verb} {name}."
-    # Free-text types, unknown types, and verb types whose target has no name.
+    # Free-text types, unknown types, objectives with their own wording, and verb types
+    # whose target has no name.
     return _text_task(text or name, voice)
 
 
-def turnin_line(turnin_npc: str | None, voice: str) -> str:
-    """The closing bullet. Generic when no source names the turn-in NPC."""
+def turnin_line(turnin_npc: str | None, voice: str, turnin_kind: str | None = None) -> str:
+    """The closing bullet. Generic when no source names the turn-in NPC; "Go see" rather
+    than "Go back to" when the turn-in is not the quest giver (kind "other" or "object")."""
     _check_voice(voice)
     npc = _clean(turnin_npc)
-    return _TURNIN_NPC[voice].format(npc=npc) if npc else _TURNIN_GENERIC[voice]
+    if not npc:
+        return _TURNIN_GENERIC[voice]
+    if turnin_kind in ("other", "object"):
+        return _TURNIN_OTHER[voice].format(npc=npc)
+    return _TURNIN_NPC[voice].format(npc=npc)
 
 
-def tasks_for(objectives: Iterable[Any], turnin_npc: str | None, voice: str) -> list[str]:
+def tasks_for(objectives: Iterable[Any], turnin_npc: str | None, voice: str,
+              turnin_kind: str | None = None) -> list[str]:
     """Objective bullets in objective order, then the turn-in line last.
 
     The first len(objectives) entries map 1:1 to the objectives, which is what the
     exported `n` field promises the addon.
     """
     _check_voice(voice)
-    return [task_for(o, voice) for o in objectives] + [turnin_line(turnin_npc, voice)]
+    return [task_for(o, voice) for o in objectives] + [turnin_line(turnin_npc, voice, turnin_kind)]
 
 
 def group_line(group_size: int | None, tag: str | None, voice: str) -> str | None:

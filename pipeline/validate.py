@@ -12,6 +12,8 @@ client would render as garbage.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -38,9 +40,23 @@ class QuestContext:
     progress: str | None = None
     complete: str | None = None
     turnin_npc: str | None = None
+    turnin_kind: str | None = None  # 'giver' | 'other' | 'object' | None
     objectives: list[Any] = field(default_factory=list)  # dicts, sqlite3.Row or db.Objective
     group_size: int | None = None
     tag: str | None = None
+
+    def fingerprint(self) -> str:
+        """Everything a summary was written against, as one short hash. A cached summary
+        whose fingerprint no longer matches was written for different objectives, a
+        different turn-in NPC or different text, and must not ship."""
+        objectives = [
+            [_get(o, "type"), _get(o, "target_name"), _get(o, "amount", 1),
+             _get(o, "amount_source", "default"), _get(o, "text")]
+            for o in self.objectives
+        ]
+        payload = [self.title, self.detail, self.objectives_text, self.progress, self.complete,
+                   self.turnin_npc, self.turnin_kind, objectives, self.group_size, self.tag]
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
     def names(self) -> list[str]:
         """Proper nouns the game itself supplies: objective targets and the turn-in NPC."""
@@ -77,6 +93,7 @@ def load_context(conn: sqlite3.Connection, quest: sqlite3.Row | int) -> QuestCon
         progress=quest["progress"],
         complete=quest["complete"],
         turnin_npc=quest["turnin_npc"],
+        turnin_kind=quest["turnin_kind"] if "turnin_kind" in quest.keys() else None,
         objectives=[dict(o) for o in db.get_objectives(conn, quest["id"])],
         group_size=meta["group_size"] if meta is not None else None,
         tag=meta["tag"] if meta is not None else None,
@@ -132,15 +149,20 @@ _DIRECTION_RE = re.compile(
 
 _WORD_RE = re.compile(r"[A-Za-z\u00C0-\u024F][A-Za-z\u00C0-\u024F'\u2019]*")
 _PLACEHOLDER_RE = re.compile(r"\$[A-Za-z]")
-_PROGRESS_RE = re.compile(r"\(?\b\d+\s*/\s*\d+\b\)?")
-_BULLET_LEAD_RE = re.compile(r"^\s*(?:[-*\u2022\u00B7\u2013\u2014\u25AA\u25E6\u2023\u25CF\u25CB>]|\d+[.)]\s)")
+_PROGRESS_RE = re.compile(r"\(?\b\d+\s*(?:/|\s(?:out\s+)?of\s)\s*\d+\b\)?")
+_BULLET_LEAD_RE = re.compile(
+    r"^\s*(?:[-*\u2022\u00B7\u2013\u2014\u25AA\u25E6\u2023\u25CF\u25CB>\u2192\u27A4\u2714\u2611\u2610]"
+    r"|\(?\w{1,2}[.):]\s|\[.?\]\s?)"
+)
 _BULLET_GLYPHS = "\u2022\u25AA\u25E6\u2023\u25CF\u25CB"
 
 # Abbreviations whose full stop does not end a sentence.
 _ABBREVIATIONS = (
     "mr", "mrs", "ms", "dr", "st", "lt", "sgt", "cpl", "capt", "cmdr", "col", "gen", "prof",
-    "jr", "sr", "vs", "etc", "no", "e.g", "i.e",
+    "jr", "sr", "vs", "etc", "e.g", "i.e", "co", "inc", "bros", "mt", "ft", "pvt", "cpt", "maj",
 )
+# "no." is an abbreviation only when a number follows ("No. 5"), not at "Kobolds say no."
+_NUMBERED_ABBREVIATION_RE = re.compile(r"\b(no)\.(?=\s*\d)", re.IGNORECASE)
 _ABBREVIATION_RE = re.compile(
     r"\b(" + "|".join(re.escape(a) for a in _ABBREVIATIONS) + r")\.", re.IGNORECASE
 )
@@ -162,6 +184,7 @@ def count_sentences(text: str) -> int:
     text = text.replace("\u2026", " ")
     text = re.sub(r"\.{2,}", " ", text)                   # ellipsis is a pause, not an end
     text = _ABBREVIATION_RE.sub(r"\1", text)              # Mr. -> Mr
+    text = _NUMBERED_ABBREVIATION_RE.sub(r"\1", text)     # No. 5 -> No 5
     text = re.sub(r"\b([A-Za-z])\.(?=\s|$)", r"\1", text)  # initials: J. R. -> J R
     text = re.sub(r"(?<=\d)\.(?=\d)", "", text)           # decimals: 1.5 -> 15
     parts = _SENTENCE_END_RE.split(text)
@@ -199,8 +222,13 @@ def _direction(match: re.Match[str]) -> str:
 
 
 def _starts_sentence(text: str, start: int) -> bool:
-    before = text[:start].rstrip(_OPENERS)
-    return not before or before[-1] in _SENTENCE_START_CHARS
+    """True when the word at `start` opens a sentence or quoted speech ('say "Please...')."""
+    raw = text[:start]
+    stripped = raw.rstrip(_OPENERS)
+    if len(stripped) < len(raw) and any(c in "\"'“‘" for c in raw[len(stripped):]):
+        return True  # first word inside quotes
+    before = stripped.rstrip("\"'’”)]").rstrip()  # closing marks before the word
+    return not before or before[-1] in _SENTENCE_START_CHARS + "–—-"
 
 
 def _fields(summary: dict) -> list[tuple[str, str]]:
@@ -267,13 +295,15 @@ def _check_counts(summary: dict, ctx: QuestContext) -> list[str]:
     return errors
 
 
-def _check_lore(summary: dict) -> list[str]:
+def _check_lore(summary: dict, ctx: QuestContext | None = None) -> list[str]:
     errors = []
+    names = ctx.names() if ctx is not None else []
     for key in ("lore_monke", "lore_plain"):
         text = summary[key]
         if len(text) >= MAX_LORE_CHARS:
             errors.append(f"{key} is {len(text)} characters; it must be under {MAX_LORE_CHARS}.")
-        sentences = count_sentences(text)
+        # A full stop inside a game name ("Venture Co. Workers") is not a sentence end.
+        sentences = count_sentences(_mask_names(text, names))
         if not 1 <= sentences <= MAX_LORE_SENTENCES:
             errors.append(f"{key} has {sentences} sentences; it must have 1 or "
                           f"{MAX_LORE_SENTENCES}.")
@@ -306,11 +336,19 @@ def _check_invention(summary: dict, ctx: QuestContext) -> list[str]:
     return errors
 
 
+def _proper_nouns(text: str) -> set[str]:
+    """Capitalised words that do not start a sentence: the game's own names in its text
+    ("Temple of the Damned"). Lower-cased for comparison."""
+    return {_normalise(m.group()) for m in _words(text)
+            if m.group()[0].isupper() and not _starts_sentence(text, m.start())}
+
+
 def _check_profanity(summary: dict, ctx: QuestContext) -> list[str]:
     errors = []
+    allowed = PROFANITY_ALLOWLIST | _proper_nouns(ctx.source_text()) | _proper_nouns(ctx.title or "")
     for label, text in _fields(summary):
         bad = [m.group() for m in _words(_mask_names(text, ctx.names()))
-               if _normalise(m.group()) not in PROFANITY_ALLOWLIST
+               if _normalise(m.group()) not in allowed
                and _PROFANITY_RE.match(_normalise(m.group()))]
         if bad:
             errors.append(f"{label} contains language that is not PG: "
@@ -320,9 +358,13 @@ def _check_profanity(summary: dict, ctx: QuestContext) -> list[str]:
 
 def _check_turnin(summary: dict, ctx: QuestContext) -> list[str]:
     npc = ctx.turnin_npc
-    if npc and npc.lower() not in summary["tasks"][-1].lower():
+    last = summary["tasks"][-1]
+    if npc and npc.lower() not in last.lower():
         return [f"The last entry of tasks must be the turn-in line and name the turn-in NPC "
-                f"{npc!r}. It was: {summary['tasks'][-1]!r}"]
+                f"{npc!r}. It was: {last!r}"]
+    if npc and ctx.turnin_kind in ("other", "object") and last.lower().startswith(("go back", "return to")):
+        return [f"The quest is handed in to {npc!r}, who is not the quest giver, so the player "
+                f"has nowhere to go back to. Write the turn-in line as 'Go see {npc}.' It was: {last!r}"]
     return []
 
 
@@ -357,10 +399,32 @@ def validate(summary: dict, ctx: QuestContext) -> list[str]:
         return errors  # the remaining checks assume the shape
     return (
         _check_counts(summary, ctx)
-        + _check_lore(summary)
+        + _check_lore(summary, ctx)
         + _check_invention(summary, ctx)
         + _check_profanity(summary, ctx)
         + _check_turnin(summary, ctx)
         + _check_markup(summary)
         + _check_task_format(summary)
     )
+
+
+# --------------------------------------------------------------------------- review aids
+
+
+def sentence_initial_capitals(summary: dict, ctx: QuestContext) -> list[str]:
+    """Capitalised words that open a sentence and are not in the quest's own vocabulary.
+
+    The invention rule cannot judge these (every sentence starts with a capital), so they
+    are handed to a human: across a batch, a word that is never written in lower case
+    anywhere and never appears in any source text is probably an invented place or name.
+    """
+    vocabulary = _vocabulary(ctx.source_text())
+    found = []
+    for _label, text in _fields(summary):
+        for match in _words(text):
+            word = match.group()
+            if (word[0].isupper() and _starts_sentence(text, match.start())
+                    and not _known(word, vocabulary)
+                    and _normalise(word) not in CAPITALISED_ALLOWLIST):
+                found.append(word)
+    return found

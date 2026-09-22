@@ -52,6 +52,12 @@ describe("Compose", function()
         assert.are.equal("Lore not yet translated.\n\nBlizzard words", Compose.DescriptionText(s, "Blizzard words"))
     end)
 
+    it("uses go-to wording for a delivery quest in plain voice", function()
+        local record = { t = { "Go see Gryan Stoutmantle." }, e = "Gryan Stoutmantle", d = true, v = 3 }
+        assert.are.same({ "Go to Gryan Stoutmantle." }, Compose.Build({ record = record, voice = "plain" }).tasks)
+        assert.are.same({ "Go see Gryan Stoutmantle." }, Compose.Build({ record = record, voice = "monke" }).tasks)
+    end)
+
     it("still ends with a turn-in line when the quest has no objectives", function()
         local s = Compose.Build({ objectives = {}, voice = "plain" })
         assert.are.same({ "Turn in the quest." }, s.tasks)
@@ -85,12 +91,87 @@ describe("Compose", function()
         assert.are.same({ "Bonk 8 Kobold Vermin (2/8)", "Grab 5 Candle (1/5)", "Go back to Marshal Dughan." }, s.tasks)
     end)
 
+    it("shows the DB bullets when the game has no objectives yet (quest only offered)", function()
+        local s = Compose.Build({ record = RECORD_214, objectives = nil, voice = "monke", showProgress = false })
+        assert.are.same({ "Grab 10 Red Silk Bandana.", "Go back to Scout Riell." }, s.tasks)
+        s = Compose.Build({ record = RECORD_214, objectives = {}, voice = "monke" })
+        assert.are.same({ "Grab 10 Red Silk Bandana.", "Go back to Scout Riell." }, s.tasks)
+    end)
+
+    it("pairs by name when the same-position line names a different live objective", function()
+        -- Shipped record 5251: the game lists the object first and the archivist second.
+        local record = { t = { "Bonk Archivist Galford.", "Poke Scarlet Archive." }, n = 2, v = 3 }
+        local live = {
+            { type = "object", text = "Archive Burned: 1/1", finished = true, numFulfilled = 1, numRequired = 1 },
+            { type = "monster", text = "Archivist Galford slain: 0/1", numFulfilled = 0, numRequired = 1 },
+        }
+        local s = Compose.Build({ record = record, objectives = live, voice = "monke", showProgress = true })
+        assert.are.same({ "Poke Scarlet Archive (done)", "Bonk Archivist Galford.", "Go back. Get shiny." }, s.tasks)
+    end)
+
+    it("pairs the last objective with the last free line when nothing contradicts it", function()
+        local record = { t = { "Bonk Archivist Galford.", "Poke Scarlet Archive.", "Grab Old Tome." }, n = 3, v = 3 }
+        local live = {
+            { type = "object", text = "Archive Burned: 1/1", finished = true, numFulfilled = 1, numRequired = 1 },
+            { type = "monster", text = "Archivist Galford slain: 0/1", numFulfilled = 0, numRequired = 1 },
+            { type = "item", text = "Dusty Tome: 0/1", numFulfilled = 0, numRequired = 1 },
+        }
+        local s = Compose.Build({ record = record, objectives = live, voice = "monke", showProgress = true })
+        assert.are.same({ "Poke Scarlet Archive (done)", "Bonk Archivist Galford.", "Grab Old Tome.", "Go back. Get shiny." },
+            s.tasks)
+    end)
+
+    it("falls back when the only free line names a different objective", function()
+        local record = { t = { "Bonk Archivist Galford.", "Bonk Archivist Galford.", "Grab Old Tome." }, n = 3, v = 3 }
+        local live = {
+            { type = "object", text = "Archive Burned: 1/1", finished = true, numFulfilled = 1, numRequired = 1 },
+            { type = "monster", text = "Archivist Galford slain: 0/1", numFulfilled = 0, numRequired = 1 },
+            { type = "item", text = "Dusty Tome: 0/1", numFulfilled = 0, numRequired = 1 },
+        }
+        local s = Compose.Build({ record = record, objectives = live, voice = "monke", showProgress = true })
+        assert.are.same({ "Poke Archive Burned (done)", "Bonk Archivist Galford.", "Grab Dusty Tome.", "Go back. Get shiny." },
+            s.tasks)
+    end)
+
+    it("does not let a short name claim a longer name's line", function()
+        local record = { t = { "Bonk 6 Burly Rockjaw Trogg.", "Bonk 4 Rockjaw Trogg.", "Go back to Senir." }, n = 2, v = 3 }
+        local live = {
+            { type = "monster", text = "Rockjaw Trogg slain: 1/4", numFulfilled = 1, numRequired = 4 },
+            { type = "monster", text = "Burly Rockjaw Trogg slain: 0/6", numFulfilled = 0, numRequired = 6 },
+        }
+        local s = Compose.Build({ record = record, objectives = live, voice = "monke", showProgress = true })
+        assert.are.same({ "Bonk 4 Rockjaw Trogg (1/4)", "Bonk 6 Burly Rockjaw Trogg (0/6)", "Go back to Senir." }, s.tasks)
+    end)
+
+    it("gives up rather than guess when two lines name the same objective", function()
+        local record = { t = { "Grab 5 Candle.", "Grab 5 Candle.", "Go back to Marshal Dughan." }, n = 2, v = 3 }
+        local live = {
+            { type = "item", text = "1/5 Candle", numFulfilled = 1, numRequired = 5 },
+            { type = "item", text = "0/5 Torch", numFulfilled = 0, numRequired = 5 },
+        }
+        local s = Compose.Build({ record = record, objectives = live, voice = "monke", showProgress = true })
+        assert.are.same({ "Grab 5 Candle (1/5)", "Grab 5 Torch (0/5)", "Go back to Marshal Dughan." }, s.tasks)
+    end)
+
+    it("treats a reputation threshold as no count at all", function()
+        local record = { t = { "Grab Abyssal Scepter.", "Make tree people like ape.", "Go back to Aurel Goldleaf." },
+            n = 2, v = 3 }
+        local live = {
+            { type = "item", text = "Abyssal Scepter: 0/1", numFulfilled = 0, numRequired = 1 },
+            { type = "reputation", text = "Cenarion Circle: Neutral / Friendly", numFulfilled = 1200, numRequired = 3000 },
+        }
+        local s = Compose.Build({ record = record, objectives = live, voice = "monke", showProgress = true })
+        assert.are.same({ "Grab Abyssal Scepter.", "Make tree people like ape.", "Go back to Aurel Goldleaf." }, s.tasks)
+    end)
+
     it("ignores records from a newer schema or with bad types", function()
         assert.is_nil(Compose.UsableRecord({ l = "x", v = 4 }))
         assert.is_nil(Compose.UsableRecord({ l = "x" }))
         assert.is_nil(Compose.UsableRecord({ l = 5, v = 3 }))
         assert.is_nil(Compose.UsableRecord({ t = { 1, 2 }, v = 3 }))
         assert.is_nil(Compose.UsableRecord("nope"))
+        assert.is_nil(Compose.UsableRecord({ t = { "a" }, n = 2, v = 3 }))
+        assert.is_nil(Compose.UsableRecord({ t = { "a" }, n = "1", v = 3 }))
         assert.is_not_nil(Compose.UsableRecord({ l = "x", v = 2 }))
     end)
 

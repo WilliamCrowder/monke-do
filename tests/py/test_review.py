@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pipeline import db, review
+from pipeline import db, review, validate
 from pipeline.llm import summarize
 
 
@@ -31,7 +31,8 @@ def make_db(n_vanilla: int = 30, n_new: int = 10):
         summarize.save_summary(
             conn, quest_id, quest["text_hash"], "v1", model="fake", summary_json=json.dumps(summary),
             status="rejected" if rejected else "ok",
-            errors=["tasks[1] is sad."] if rejected else [], attempts=3 if rejected else 1)
+            errors=["tasks[1] is sad."] if rejected else [], attempts=3 if rejected else 1,
+            context_hash=validate.load_context(conn, quest).fingerprint())
     return conn
 
 

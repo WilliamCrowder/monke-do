@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS source_rows (
     progress        TEXT,
     complete        TEXT,
     turnin_npc      TEXT,
+    turnin_kind     TEXT,               -- 'giver' | 'other' | 'object' | NULL (unknown)
     fetched_at      TEXT    NOT NULL,
     text_hash       TEXT    NOT NULL,
     PRIMARY KEY (id, source)
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS quests (
     progress        TEXT,
     complete        TEXT,
     turnin_npc      TEXT,
+    turnin_kind     TEXT,
     source          TEXT    NOT NULL,
     fetched_at      TEXT    NOT NULL,
     text_hash       TEXT    NOT NULL
@@ -103,6 +105,7 @@ CREATE TABLE IF NOT EXISTS summaries (
     status         TEXT    NOT NULL,   -- 'ok' | 'rejected' | 'error'
     errors         TEXT,               -- JSON list of validator messages
     attempts       INTEGER NOT NULL DEFAULT 1,
+    context_hash   TEXT,               -- fingerprint of everything the writer was shown
     created_at     TEXT    NOT NULL,
     PRIMARY KEY (quest_id, text_hash, prompt_version)
 );
@@ -125,6 +128,7 @@ class QuestRow:
     progress: str | None = None
     complete: str | None = None
     turnin_npc: str | None = None
+    turnin_kind: str | None = None  # 'giver' | 'other' (a different NPC) | 'object'
     fetched_at: str | None = None
 
 
@@ -153,10 +157,28 @@ class SourceResult:
     notes: list[str] = field(default_factory=list)
 
 
+# Columns added after the first databases were built. CREATE TABLE IF NOT EXISTS leaves an
+# old table alone, so they are added here; the data is rebuilt from the raw cache anyway.
+_ADDED_COLUMNS = (
+    ("source_rows", "turnin_kind", "TEXT"),
+    ("quests", "turnin_kind", "TEXT"),
+    ("summaries", "context_hash", "TEXT"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, kind in _ADDED_COLUMNS:
+        present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in present:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+    conn.commit()
+
+
 def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     return conn
 
 
@@ -190,35 +212,53 @@ def upsert_source_row(conn: sqlite3.Connection, row: QuestRow) -> bool:
     for f in TEXT_FIELDS + ("turnin_npc",):
         setattr(row, f, clean(getattr(row, f)))
     h = text_hash(row)
+    if row.turnin_kind not in (None, "giver", "other", "object"):
+        raise ValueError(f"quest {row.id}: unknown turnin_kind {row.turnin_kind!r}")
     old = conn.execute(
-        "SELECT text_hash, turnin_npc FROM source_rows WHERE id = ? AND source = ?",
+        "SELECT text_hash, turnin_npc, turnin_kind FROM source_rows WHERE id = ? AND source = ?",
         (row.id, row.source),
     ).fetchone()
-    if old is not None and old["text_hash"] == h and old["turnin_npc"] == row.turnin_npc:
+    if (old is not None and old["text_hash"] == h and old["turnin_npc"] == row.turnin_npc
+            and old["turnin_kind"] == row.turnin_kind):
         return False
     conn.execute(
         """INSERT OR REPLACE INTO source_rows
            (id, source, title, detail, objectives_text, progress, complete,
-            turnin_npc, fetched_at, text_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            turnin_npc, turnin_kind, fetched_at, text_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (row.id, row.source, row.title, row.detail, row.objectives_text, row.progress,
-         row.complete, row.turnin_npc, row.fetched_at or utcnow(), h),
+         row.complete, row.turnin_npc, row.turnin_kind, row.fetched_at or utcnow(), h),
     )
     return True
 
 
-def replace_objectives(conn: sqlite3.Connection, quest_id: int, objectives: list[Objective]) -> None:
-    """Replace a quest's structured objectives. db2 amounts are never overwritten by weaker ones."""
-    existing = conn.execute(
-        "SELECT amount_source FROM objectives WHERE quest_id = ? LIMIT 1", (quest_id,)
-    ).fetchone()
+def replace_objectives(conn: sqlite3.Connection, quest_id: int, objectives: list[Objective]) -> bool:
+    """Replace a quest's structured objectives. Returns False when the existing rows won.
+
+    Rows with db2 amounts (wago) beat rows without, but wago rows carry no names: a db2
+    row that replaces a named row of the same type and target keeps that row's name and
+    wording, so the rule-based bullets do not lose their verb and count.
+    """
+    existing = get_objectives(conn, quest_id)
+    existing_is_db2 = any(o["amount_source"] == "db2" for o in existing)
     incoming_is_db2 = any(o.amount_source == "db2" for o in objectives)
-    if existing is not None and existing["amount_source"] == "db2" and not incoming_is_db2:
-        return
-    conn.execute("DELETE FROM objectives WHERE quest_id = ?", (quest_id,))
+    if existing_is_db2 and not incoming_is_db2:
+        return False
     for o in objectives:
         if o.type not in OBJECTIVE_TYPES:
             raise ValueError(f"quest {quest_id}: unknown objective type {o.type!r}")
+    if incoming_is_db2 and existing and not existing_is_db2:
+        by_target = {(row["type"], row["target_id"]): row for row in existing if row["target_id"] is not None}
+        by_idx = {row["idx"]: row for row in existing}
+        for o in objectives:
+            match = by_target.get((o.type, o.target_id)) if o.target_id is not None else None
+            if match is None and by_idx.get(o.idx) is not None and by_idx[o.idx]["type"] == o.type:
+                match = by_idx[o.idx]
+            if match is not None:
+                o.target_name = o.target_name or match["target_name"]
+                o.text = o.text or match["text"]
+    conn.execute("DELETE FROM objectives WHERE quest_id = ?", (quest_id,))
+    for o in objectives:
         conn.execute(
             """INSERT INTO objectives
                (quest_id, idx, type, target_id, target_name, amount, amount_source, text, source)
@@ -226,6 +266,7 @@ def replace_objectives(conn: sqlite3.Connection, quest_id: int, objectives: list
             (quest_id, o.idx, o.type, o.target_id, clean(o.target_name), o.amount,
              o.amount_source, clean(o.text), o.source),
         )
+    return True
 
 
 def upsert_meta(conn: sqlite3.Connection, quest_id: int, source: str, **fields) -> None:
@@ -274,12 +315,14 @@ def resolve_quests(conn: sqlite3.Connection) -> dict:
         rows.sort(key=lambda r: r["fetched_at"], reverse=True)  # newest first (stable)
         rows.sort(key=lambda r: priority_of(r["source"]))
         winner = rows[0]
-        merged = {f: winner[f] for f in TEXT_FIELDS + ("turnin_npc",)}
+        merged = {f: winner[f] for f in TEXT_FIELDS + ("turnin_npc", "turnin_kind")}
         for other in rows[1:]:
             for f in TEXT_FIELDS + ("turnin_npc",):
                 if merged[f] is None and other[f] is not None:
                     merged[f] = other[f]
                     stats["filled_fields"] += 1
+                    if f == "turnin_npc":
+                        merged["turnin_kind"] = other["turnin_kind"]  # travels with the name
                 elif (
                     f in TEXT_FIELDS
                     and winner[f] is not None
@@ -296,15 +339,50 @@ def resolve_quests(conn: sqlite3.Connection) -> dict:
         conn.execute(
             """INSERT INTO quests
                (id, title, detail, objectives_text, progress, complete, turnin_npc,
-                source, fetched_at, text_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                turnin_kind, source, fetched_at, text_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (qid, merged["title"], merged["detail"], merged["objectives_text"],
-             merged["progress"], merged["complete"], merged["turnin_npc"],
+             merged["progress"], merged["complete"], merged["turnin_npc"], merged["turnin_kind"],
              winner["source"], winner["fetched_at"], text_hash(merged)),
         )
         stats["quests"] += 1
     conn.commit()
     return stats
+
+
+def reconcile_amounts(conn: sqlite3.Connection, infer_amounts) -> int:
+    """Re-read sentence-parsed amounts against the sentence that won resolve_quests.
+
+    Questie parses counts from its own objectives sentence. When a higher-priority source
+    supplies a different sentence for the same quest (Forever rewrote it), those counts
+    may be stale, so every non-db2 counted objective is inferred again from the winning
+    sentence. `infer_amounts(names, sentence) -> [amount | None]` comes from the questie
+    module; passing it in keeps db.py free of source imports. Returns rows changed.
+    """
+    changed = 0
+    quests = conn.execute(
+        """SELECT q.id, q.objectives_text FROM quests q
+           WHERE q.objectives_text IS NOT NULL
+             AND EXISTS (SELECT 1 FROM objectives o
+                         WHERE o.quest_id = q.id AND o.amount_source != 'db2')"""
+    ).fetchall()
+    for quest in quests:
+        rows = get_objectives(conn, quest["id"])
+        if any(r["amount_source"] == "db2" for r in rows):
+            continue
+        countable = [r["target_name"] if r["type"] in ("monster", "item", "object") else None for r in rows]
+        amounts = infer_amounts(countable, quest["objectives_text"])
+        for row, amount in zip(rows, amounts):
+            if countable[rows.index(row)] is None:
+                continue
+            new_amount, new_source = (amount, "text") if amount else (1, "default")
+            if (row["amount"], row["amount_source"]) != (new_amount, new_source):
+                conn.execute(
+                    "UPDATE objectives SET amount = ?, amount_source = ? WHERE quest_id = ? AND idx = ?",
+                    (new_amount, new_source, quest["id"], row["idx"]),
+                )
+                changed += 1
+    return changed
 
 
 def get_objectives(conn: sqlite3.Connection, quest_id: int) -> list[sqlite3.Row]:

@@ -231,6 +231,12 @@ class _AnthropicBase:
         self._client = client
         # Summed API usage, so the CLI can print cost and confirm cache_read_input_tokens > 0.
         self.usage: dict[str, int] = {}
+        # Called with (request, response_text) as each paid answer arrives, so the caller can
+        # write it to disk before the run can be interrupted. Set by summarize.run.
+        self._on_result: Callable[[SummaryRequest, str], None] | None = None
+
+    def on_result(self, callback: Callable[[SummaryRequest, str], None] | None) -> None:
+        self._on_result = callback
 
     @property
     def client(self) -> Any:
@@ -287,6 +293,8 @@ class AnthropicDirectProvider(_AnthropicBase):
             try:
                 out[request.quest_id] = self._read_message(
                     self.client.messages.create(**self._params(request)))
+                if self._on_result is not None and isinstance(out[request.quest_id], str):
+                    self._on_result(request, out[request.quest_id])
             except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
                 raise  # every further call would fail the same way: stop the run
             except anthropic.BadRequestError as exc:
@@ -349,10 +357,21 @@ class AnthropicBatchProvider(_AnthropicBase):
             except anthropic.NotFoundError:  # results are kept 29 days; older ones are gone
                 self._journal({"batch_id": batch_id, "done": True})
                 by_fingerprint.update(wanted)
+            if self._on_result is not None:  # hand the paid answers over before the next batch
+                for request in wanted.values():
+                    result = out.get(request.quest_id)
+                    if isinstance(result, str):
+                        self._on_result(request, result)
         fresh = list(by_fingerprint.values())
         for start in range(0, len(fresh), self.max_batch_requests):
             chunk = {self._key(r): r for r in fresh[start:start + self.max_batch_requests]}
-            out.update(self._collect(self._submit(chunk), chunk))
+            collected = self._collect(self._submit(chunk), chunk)
+            out.update(collected)
+            if self._on_result is not None:
+                for request in chunk.values():
+                    result = collected.get(request.quest_id)
+                    if isinstance(result, str):
+                        self._on_result(request, result)
         return out
 
     # -- steps
@@ -398,7 +417,9 @@ class AnthropicBatchProvider(_AnthropicBase):
                 out[request.quest_id] = self._read_result(entry.result)
         for request in chunk.values():
             out.setdefault(request.quest_id, ProviderError("the batch returned no result"))
-        self._journal({"batch_id": batch_id, "done": True})
+        # Only the keys handed over are done. A resumed batch collected for a subset of its
+        # requests (--ids, --limit) stays open for the rest, whose results were paid for.
+        self._journal({"batch_id": batch_id, "delivered": sorted(chunk)})
         return out
 
     def _read_result(self, result: Any) -> Result:
@@ -431,6 +452,12 @@ class AnthropicBatchProvider(_AnthropicBase):
             record = json.loads(line) if line.strip() else {}
             if record.get("done"):
                 submitted.pop(record["batch_id"], None)
+            elif "delivered" in record and record["batch_id"] in submitted:
+                left = [k for k in submitted[record["batch_id"]] if k not in set(record["delivered"])]
+                if left:
+                    submitted[record["batch_id"]] = left
+                else:
+                    submitted.pop(record["batch_id"])
             elif "batch_id" in record and record.get("model") == self.model:
                 submitted[record["batch_id"]] = record["keys"]
         yield from submitted.items()

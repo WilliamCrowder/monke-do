@@ -35,9 +35,10 @@ Forever's new quests only reach the database once public sites list them. If a q
 
 Quest titles, objective sentences, turn-in NPCs and objective targets for vanilla quests come
 from the [Questie](https://github.com/Questie/Questie) project's database
-([QuestieDB](https://github.com/Questie/QuestieDB)), which is GPLv3. Monke Do is therefore
-licensed under the **GNU GPL v3 or later**; see [LICENSE](LICENSE). Thank you to everyone who has
-contributed to Questie's data over the years.
+([QuestieDB](https://github.com/Questie/QuestieDB)), published under the GNU GPL v3. Monke Do is
+therefore licensed under the **GNU GPL v3** (GPL-3.0-only); see [LICENSE](LICENSE) and
+[CREDITS.txt](addon/MonkeDo/CREDITS.txt), which ships inside the addon. Thank you to everyone
+who has contributed to Questie's data over the years.
 
 World of Warcraft and its quest text are the property of Blizzard Entertainment. Monke Do is free,
 has no ads and asks for no donations in game.

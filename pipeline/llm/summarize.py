@@ -79,7 +79,12 @@ def build_user_message(ctx: QuestContext) -> str:
             lines.append(f"{label}: {value}")
     lines.append(f"Structured objectives ({len(ctx.objectives)}):")
     lines += [f"{i}. {_objective_line(o)}" for i, o in enumerate(ctx.objectives, start=1)]
-    lines.append(f"Turn-in NPC: {ctx.turnin_npc or 'unknown'}")
+    turnin = ctx.turnin_npc or "unknown"
+    if ctx.turnin_npc and ctx.turnin_kind == "other":
+        turnin += " (not the quest giver)"
+    elif ctx.turnin_npc and ctx.turnin_kind == "object":
+        turnin += " (an object, not a person)"
+    lines.append(f"Turn-in NPC: {turnin}")
     if rules.group_line(ctx.group_size, ctx.tag, rules.PLAIN) is not None:
         group = [f"size {ctx.group_size}"] if (ctx.group_size or 0) > 1 else []
         group += [f"tag {ctx.tag}"] if ctx.tag else []
@@ -91,25 +96,36 @@ def build_user_message(ctx: QuestContext) -> str:
 
 
 def get_summary(
-    conn: sqlite3.Connection, quest_id: int, text_hash: str, prompt_version: str
+    conn: sqlite3.Connection, quest_id: int, text_hash: str, prompt_version: str,
+    context_hash: str | None = None,
 ) -> sqlite3.Row | None:
-    """The cached summary row for the quest's *current* text, if any."""
-    return conn.execute(
+    """The cached summary row for the quest's *current* text, if any.
+
+    With `context_hash`, a row written against different objectives, a different turn-in
+    NPC or different group data (the text hash covers only the prose) counts as absent:
+    it is stale, and the addon would pair its bullets with the wrong live objectives.
+    """
+    row = conn.execute(
         "SELECT * FROM summaries WHERE quest_id = ? AND text_hash = ? AND prompt_version = ?",
         (quest_id, text_hash, prompt_version),
     ).fetchone()
+    if row is not None and context_hash is not None and row["context_hash"] != context_hash:
+        return None
+    return row
 
 
 def save_summary(
     conn: sqlite3.Connection, quest_id: int, text_hash: str, prompt_version: str, *,
     model: str, summary_json: str | None, status: str, errors: list[str], attempts: int,
+    context_hash: str | None = None,
 ) -> None:
     conn.execute(
         """INSERT OR REPLACE INTO summaries
-           (quest_id, text_hash, prompt_version, model, json, status, errors, attempts, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (quest_id, text_hash, prompt_version, model, json, status, errors, attempts,
+            context_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (quest_id, text_hash, prompt_version, model, summary_json, status,
-         json.dumps(errors, ensure_ascii=False), attempts, db.utcnow()),
+         json.dumps(errors, ensure_ascii=False), attempts, context_hash, db.utcnow()),
     )
 
 
@@ -151,12 +167,14 @@ def apply_overrides(
         quest = conn.execute("SELECT * FROM quests WHERE id = ?", (quest_id,)).fetchone()
         if quest is None:
             continue  # pinned for a quest this database does not know (yet)
-        errors = validate(summary, load_context(conn, quest))
+        ctx = load_context(conn, quest)
+        errors = validate(summary, ctx)
         if errors:
             raise OverrideError(
                 f"override for quest {quest_id} in {path} is invalid:\n  " + "\n  ".join(errors))
         save_summary(conn, quest_id, quest["text_hash"], prompt_version, model=OVERRIDE_MODEL,
-                     summary_json=canonical_json(summary), status="ok", errors=[], attempts=0)
+                     summary_json=canonical_json(summary), status="ok", errors=[], attempts=0,
+                     context_hash=ctx.fingerprint())
         applied.add(quest_id)
     stale = [r["quest_id"] for r in conn.execute(
         "SELECT quest_id FROM summaries WHERE model = ? AND prompt_version = ?",
@@ -234,7 +252,7 @@ def _pending(
             continue
         stats["quests"] += 1
         ctx = load_context(conn, quest)
-        cached = get_summary(conn, quest["id"], quest["text_hash"], prompt_version)
+        cached = get_summary(conn, quest["id"], quest["text_hash"], prompt_version, ctx.fingerprint())
         if not ctx.has_prose():
             stats["skipped_no_prose"] += 1
         elif cached is not None and cached["status"] in CACHED_STATUSES:
@@ -246,13 +264,18 @@ def _pending(
 
 def _ask(
     provider: Provider, requests: list[SummaryRequest], pending: dict[int, _Work],
-    log: ResponseLog, prompt_version: str, stats: dict,
+    log: ResponseLog, prompt_version: str, stats: dict, no_replay: set[int] = frozenset(),
 ) -> dict[int, Result]:
-    """Answer requests from the raw log where possible, from the provider otherwise."""
+    """Answer requests from the raw log where possible, from the provider otherwise.
+
+    The log only stands in for a paid provider: a summaries file must always be read,
+    and a quest the caller wants asked again (`no_replay`) goes to the provider even if
+    an earlier paid answer is on file.
+    """
     results: dict[int, Result] = {}
     to_send = []
     for request in requests:
-        logged = log.get(request)
+        logged = log.get(request) if provider.paid and request.quest_id not in no_replay else None
         if logged is None:
             to_send.append(request)
             continue
@@ -260,13 +283,28 @@ def _ask(
         pending[request.quest_id].model = logged.get("model") or provider.model
         stats["replayed"] += 1
     if to_send:
-        answers = provider.summarize_many(to_send)
+        logged_early: set[int] = set()
+
+        def keep(request: SummaryRequest, response: str) -> None:
+            # Paid answers reach the log as they arrive; an interrupted run loses nothing.
+            work = pending[request.quest_id]
+            log.append(request, response, model=provider.model, text_hash=work.text_hash,
+                       prompt_version=prompt_version)
+            logged_early.add(request.quest_id)
+
+        if provider.paid and hasattr(provider, "on_result"):
+            provider.on_result(keep)
+        try:
+            answers = provider.summarize_many(to_send)
+        finally:
+            if provider.paid and hasattr(provider, "on_result"):
+                provider.on_result(None)
         stats["requested"] += len(to_send)
         for request in to_send:
             result = answers.get(request.quest_id, ProviderError("the provider returned nothing"))
             work = pending[request.quest_id]
             work.model = provider.model
-            if isinstance(result, str) and provider.paid:
+            if isinstance(result, str) and provider.paid and request.quest_id not in logged_early:
                 log.append(request, result, model=provider.model, text_hash=work.text_hash,
                            prompt_version=prompt_version)
             results[request.quest_id] = result
@@ -299,13 +337,16 @@ def run(
     max_retries: int = 2,
     overrides_path: Path | None = None,
     log_path: Path | None = DEFAULT_LOG_PATH,
+    no_replay: Iterable[int] = (),
 ) -> dict:
     """Fill `summaries` for every quest that needs one. Returns counters for the CLI.
 
     `limit` caps how many quests are sent to the provider in this run. `log_path=None`
     turns the raw response log off (tests); `overrides_path=None` means the default
-    pipeline/llm/overrides.jsonl.
+    pipeline/llm/overrides.jsonl. Quests in `no_replay` are asked again even when the
+    raw log holds an answer (the CLI passes the ids it forgot with --retry-rejected).
     """
+    no_replay = set(no_replay)
     stats = dict.fromkeys(("quests", "overrides", "cached", "skipped_no_prose", "pending",
                            "requested", "replayed", "rounds", "ok", "rejected", "error",
                            "not_provided"), 0)
@@ -321,7 +362,7 @@ def run(
             break
         stats["rounds"] += 1
         requests = [SummaryRequest(qid, system, w.user, w.feedback) for qid, w in pending.items()]
-        results = _ask(provider, requests, pending, log, prompt_version, stats)
+        results = _ask(provider, requests, pending, log, prompt_version, stats, no_replay)
         may_retry = round_no < max_retries and provider.supports_feedback
         for quest_id, result in results.items():
             work = pending[quest_id]
@@ -338,7 +379,7 @@ def run(
             status, errors = verdict
             save_summary(conn, quest_id, work.text_hash, prompt_version, model=work.model,
                          summary_json=work.last_output, status=status, errors=errors,
-                         attempts=work.attempts)
+                         attempts=work.attempts, context_hash=work.ctx.fingerprint())
             stats[status] += 1
             del pending[quest_id]
         conn.commit()  # a crash in a later round keeps what this round settled

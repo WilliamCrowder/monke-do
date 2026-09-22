@@ -34,7 +34,11 @@ from pipeline import db
 DEFAULT_USER_AGENT = "MonkeDoPipeline/0.1"
 
 # (url, headers) -> (status code, body text). Tests pass a fake; the default uses httpx.
-Transport = Callable[[str, dict[str, str]], tuple[int, str]]
+# (url, headers) -> (status, body, location). `location` is the Location header of a
+# redirect, or None. Redirects are followed by PoliteFetcher, never by the transport, so
+# every hop goes through robots.txt, the throttle and the same-site check.
+Transport = Callable[[str, dict[str, str]], tuple]
+MAX_REDIRECTS = 5
 
 
 class StopFetching(Exception):
@@ -64,8 +68,8 @@ class Page:
 def _httpx_transport(url: str, headers: dict[str, str]) -> tuple[int, str]:
     import httpx  # imported here so offline runs and tests never need it
 
-    reply = httpx.get(url, headers=headers, follow_redirects=True, timeout=60)
-    return reply.status_code, reply.text
+    reply = httpx.get(url, headers=headers, follow_redirects=False, timeout=60)
+    return reply.status_code, reply.text, reply.headers.get("location")
 
 
 def most_specific_rule_first(parser: urllib.robotparser.RobotFileParser) -> None:
@@ -151,7 +155,7 @@ class PoliteFetcher:
             raise ValueError(f"{url} is not on {self.base_url}; one fetcher serves one site")
         return url
 
-    def _request(self, url: str) -> tuple[int, str]:
+    def _request(self, url: str) -> tuple[int, str, str | None]:
         """One throttled GET. 403 and 429 end the run for every later URL too."""
         if self._stopped:
             raise StopFetching(self._stopped)
@@ -160,21 +164,23 @@ class PoliteFetcher:
             if wait > 0:
                 self._sleep(wait)
         try:
-            status, text = self._transport(url, {"User-Agent": self.user_agent})
+            reply = self._transport(url, {"User-Agent": self.user_agent})
         finally:
             self._last_request = self._clock()
             self.requests_made += 1
+        status, text = reply[0], reply[1]
+        location = reply[2] if len(reply) > 2 else None
         if status in (403, 429):
             self._stopped = f"HTTP {status} from {url}"
             raise StopFetching(self._stopped)
-        return status, text
+        return status, text, location
 
     def _load_robots(self) -> urllib.robotparser.RobotFileParser:
         """Fetch robots.txt once per run, through the same throttle as everything else."""
         if self._robots is not None:
             return self._robots
         robots_url = urljoin(self.base_url, "/robots.txt")
-        status, text = self._request(robots_url)
+        status, text, _ = self._request(robots_url)
         parser = urllib.robotparser.RobotFileParser(robots_url)
         if status == 200:
             parser.parse(text.splitlines())
@@ -198,11 +204,19 @@ class PoliteFetcher:
             return page
         if self.offline:
             raise NotCached(f"{url} is not in {self.cache_dir} and offline mode is on")
-        if not self._load_robots().can_fetch(self.user_agent, url):
-            raise RobotsDisallowed(f"robots.txt disallows {url}")
-        status, text = self._request(url)
-        if status != 200:
-            raise FetchError(f"HTTP {status} from {url}")
-        fetched_at = db.utcnow()
-        self.store(url, text, fetched_at)
-        return Page(url, text, fetched_at, from_cache=False)
+        target = url
+        for _hop in range(MAX_REDIRECTS + 1):
+            if not self._load_robots().can_fetch(self.user_agent, target):
+                raise RobotsDisallowed(f"robots.txt disallows {target}")
+            status, text, location = self._request(target)
+            if status in (301, 302, 303, 307, 308) and location:
+                # Same site only (absolute() raises otherwise), then back through
+                # robots.txt and the throttle like any other page.
+                target = self.absolute(location)
+                continue
+            if status != 200:
+                raise FetchError(f"HTTP {status} from {target}")
+            fetched_at = db.utcnow()
+            self.store(url, text, fetched_at)  # cached under the URL that was asked for
+            return Page(url, text, fetched_at, from_cache=False)
+        raise FetchError(f"{url}: more than {MAX_REDIRECTS} redirects")

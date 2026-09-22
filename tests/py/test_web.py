@@ -291,3 +291,47 @@ def test_load_offline_from_a_seeded_cache(tmp_path):
     assert fetched_at == "2026-09-20T10:00:05Z"
     with pytest.raises(NotCached):
         site.load(db.connect(), tmp_path / "nothing-here", offline=True)
+
+
+# -- redirects ---------------------------------------------------------------
+
+
+def test_a_same_site_redirect_is_throttled_and_checked_like_any_page(tmp_path):
+    pages = _site_pages()
+    pages[f"{BASE}/quests/old-slug-1"] = (301, "", f"{BASE}/quests/light-s-justice-92421/")
+    pages[f"{BASE}/quests/light-s-justice-92421/"] = (200, _read("quest_new.html"))
+    fetcher, transport, fake_time = _fetcher(tmp_path, pages)
+    page = fetcher.get("/quests/old-slug-1")
+    urls = [call[0] for call in transport.calls]
+    assert urls == [f"{BASE}/robots.txt", f"{BASE}/quests/old-slug-1", f"{BASE}/quests/light-s-justice-92421/"]
+    times = [call[1] for call in transport.calls]
+    assert all(later - earlier >= 2.0 for earlier, later in zip(times, times[1:]))
+    assert page.url == f"{BASE}/quests/old-slug-1" and "Missing Lantern" in page.html
+    assert fetcher.get("/quests/old-slug-1").from_cache  # cached under the URL asked for
+
+
+def test_a_redirect_into_a_disallowed_path_is_refused(tmp_path):
+    pages = _site_pages()
+    pages[f"{BASE}/quests/moved-2"] = (302, "", f"{BASE}/api/quests/2")
+    fetcher, transport, _ = _fetcher(tmp_path, pages)
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("/quests/moved-2")
+    assert f"{BASE}/api/quests/2" not in [call[0] for call in transport.calls]
+
+
+def test_a_redirect_off_site_is_refused(tmp_path):
+    pages = _site_pages()
+    pages[f"{BASE}/quests/moved-3"] = (307, "", "https://other.example/quests/3")
+    fetcher, transport, _ = _fetcher(tmp_path, pages)
+    with pytest.raises(ValueError, match="one fetcher serves one site"):
+        fetcher.get("/quests/moved-3")
+    assert len(transport.calls) == 2  # robots.txt and the first hop only
+
+
+def test_redirect_loops_end(tmp_path):
+    pages = _site_pages()
+    pages[f"{BASE}/quests/a"] = (301, "", f"{BASE}/quests/b")
+    pages[f"{BASE}/quests/b"] = (301, "", f"{BASE}/quests/a")
+    fetcher, _, _ = _fetcher(tmp_path, pages)
+    with pytest.raises(FetchError, match="redirects"):
+        fetcher.get("/quests/a")

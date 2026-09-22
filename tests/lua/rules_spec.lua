@@ -32,6 +32,12 @@ describe("Rules", function()
             assert.is_nil(have)
             assert.is_nil(need)
         end)
+        it("reports whether the text was a kill line", function()
+            local _, _, _, slain = Rules.ParseObjectiveText("0/8 Kobold Vermin slain")
+            assert.is_true(slain)
+            _, _, _, slain = Rules.ParseObjectiveText("Find Mankrik's Wife: 0/1")
+            assert.is_false(slain)
+        end)
         it("survives junk", function()
             assert.are.equal("", (Rules.ParseObjectiveText(nil)))
             assert.are.equal("", (Rules.ParseObjectiveText(42)))
@@ -79,6 +85,20 @@ describe("Rules", function()
             local o = { type = "somethingnew", text = "Dance with the trogg" }
             assert.are.equal("Do the thing: Dance with the trogg.", Rules.Line(o, "monke"))
         end)
+        it("keeps the game's words for a credit objective that is not a kill", function()
+            local o = { type = "monster", text = "Find Mankrik's Wife: 0/1", numRequired = 1, numFulfilled = 0 }
+            assert.are.equal("Do the thing: Find Mankrik's Wife.", Rules.Line(o, "monke"))
+            assert.are.equal("Find Mankrik's Wife.", Rules.Line(o, "plain"))
+            o = { type = "monster", text = "2/5 Peons Awoken", numRequired = 5, numFulfilled = 2 }
+            assert.are.equal("Do the thing: Peons Awoken.", Rules.Line(o, "monke"))
+        end)
+        it("does not double the punctuation of text ending in ! or ?", function()
+            local o = { type = "event", text = "Survive!", numRequired = 1 }
+            assert.are.equal("Do the thing: Survive!", Rules.Line(o, "monke"))
+            assert.are.equal("Survive!", Rules.Line(o, "plain"))
+            o = { type = "event", text = "0/1 Who goes there?", numRequired = 1 }
+            assert.are.equal("Who goes there?", Rules.Line(o, "plain"))
+        end)
         it("reads the count from Classic-format text when the API gives none", function()
             local o = { type = "item", text = "Linen Cloth: 2/6" }
             assert.are.equal("Grab 6 Linen Cloth.", Rules.Line(o, "monke"))
@@ -113,6 +133,10 @@ describe("Rules", function()
             assert.are.equal("Go back to Scout Riell.", Rules.TurnIn("Scout Riell", "monke"))
             assert.are.equal("Return to Scout Riell.", Rules.TurnIn("Scout Riell", "plain"))
         end)
+        it("says go see when the turn-in is not the quest giver", function()
+            assert.are.equal("Go see Gryan Stoutmantle.", Rules.TurnIn("Gryan Stoutmantle", "monke", true))
+            assert.are.equal("Go to Gryan Stoutmantle.", Rules.TurnIn("Gryan Stoutmantle", "plain", true))
+        end)
         it("has a generic line otherwise", function()
             assert.are.equal("Go back. Get shiny.", Rules.TurnIn(nil, "monke"))
             assert.are.equal("Turn in the quest.", Rules.TurnIn("", "plain"))
@@ -143,7 +167,7 @@ describe("Rules", function()
         end)
         it("every key exists in both voices", function()
             for _, key in ipairs({ "monster", "monster_one", "item", "item_one", "object", "object_one", "event",
-                "reputation", "reputation_unknown", "turnin", "turnin_unknown", "group", "group_one", "group_tag",
+                "reputation", "reputation_unknown", "turnin", "turnin_other", "turnin_unknown", "group", "group_one", "group_tag",
                 "rewards", "rewards_choice", "no_lore", "progress_todo", "progress_ready", "complete",
                 "toggle_to_original", "toggle_to_monke", "toggle_tip_original", "toggle_tip_monke" }) do
                 assert.is_true(Voice.Get(key, "monke") ~= "", key)

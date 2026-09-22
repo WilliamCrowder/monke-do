@@ -172,55 +172,148 @@ def _values(table: object) -> list:
 # Amounts from the objectives sentence
 # --------------------------------------------------------------------------
 
-_NUMBER_WORDS = {
+_ONES = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
     "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
-    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
 }
-_COUNT = r"(?<![\w.,])(\d{1,4}|" + "|".join(_NUMBER_WORDS) + r")\s+"
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+         "eighty": 80, "ninety": 90}
+_NUMBER_WORD = (
+    r"(?:" + "|".join(_TENS) + r")(?:-(?:" + "|".join(k for k, v in _ONES.items() if v < 10) + r"))?"
+    r"|" + "|".join(_ONES)
+)
+# A count token: digits or a number word, not glued to a word, a decimal point or a hyphen
+# ("twenty-four" must not yield 4; "Reaper 6000" is handled by the caller).
+_COUNT = r"(?<![\w.,-])(\d{1,4}|" + _NUMBER_WORD + r")\s+"
 # Quest text likes measure words: "5 pieces of Alterac Granite", "8 bottles of Rot Hide Ichor".
 _MEASURE = r"(?:[A-Za-z]+\s+of\s+)?"
+# After the name: not a hyphenated continuation ("Ogre-Mages"), and not another capitalised
+# word ("20 Plaguehound Runts" is not twenty Plaguehounds).
+_AFTER = r"(?![\w-])(?!\s+(?-i:[A-Z]))"  # the pattern is case-insensitive; this part is not
+
+
+# "Collect 7 Power Crystals of each color": one count, meant for every objective that shares
+# the name. Looked for in the few words after the count.
+_EACH = re.compile(r"\S+\s+(?:\S+\s+){0,4}?(?:of\s+)?each\b", re.IGNORECASE)
+
+
+def _number(token: str) -> int:
+    token = token.lower()
+    if token.isdigit():
+        return int(token)
+    tens, _, ones = token.partition("-")
+    if tens in _TENS:
+        return _TENS[tens] + (_ONES.get(ones, 0) if ones else 0)
+    return _ONES[token]
+
+
+_IRREGULAR = {"man": "men", "mage": "magi", "magus": "magi", "mouse": "mice", "child": "children",
+              "foot": "feet", "tooth": "teeth", "goose": "geese", "ox": "oxen"}
 
 
 def _word_pattern(word: str) -> str:
-    """Match a word by its stem so plurals still hit: Bandana/Bandanas, Wolf/Wolves.
-    Dropping the last two letters covers -f/-ves and -y/-ies without a word list."""
-    stem = word if len(word) <= 3 else word[:max(3, len(word) - 2)]
-    return re.escape(stem) + r"[\w']*"
+    """Match a word in its singular or plural spelling: Bandana/Bandanas, Wolf/Wolves,
+    Harpy/Harpies, Highwayman/Highwaymen, Mage/Magi, Antenna/Antennae. A long word also
+    matches by its stem (Corrupted/Corrupt), which short words such as Drake must not, or
+    Dra- would claim Dragonspawn."""
+    forms = [word, word + "s", word + "es"]
+    lower = word.lower()
+    if lower.endswith("y"):
+        forms.append(word[:-1] + "ies")
+    if lower.endswith("f"):
+        forms.append(word[:-1] + "ves")
+    if lower.endswith("fe"):
+        forms.append(word[:-2] + "ves")
+    if lower.endswith("a"):
+        forms.append(word + "e")
+    for singular, plural in _IRREGULAR.items():
+        if lower.endswith(singular):
+            forms.append(word[:-len(singular)] + plural)
+    escaped = [re.escape(f) for f in sorted(set(forms), key=len, reverse=True)]
+    if len(word) >= 7 and word.isalpha():
+        escaped.append(re.escape(word[:-2]) + r"(?-i:[a-z'])*")
+    return "(?:" + "|".join(escaped) + ")"
 
 
-def _count_before(words: list[str], objectives_text: str) -> int | None:
-    pattern = _COUNT + _MEASURE + r"[\s-]+".join(_word_pattern(w) for w in words)
-    match = re.search(pattern, objectives_text, re.IGNORECASE)
-    if not match:
-        return None
-    count = match.group(1).lower()
-    amount = _NUMBER_WORDS.get(count) or int(count)
-    return amount if amount >= 1 else None
+def _pattern(words: list[str]) -> re.Pattern:
+    body = r"[\s-]+".join(_word_pattern(w) for w in words)
+    return re.compile(_COUNT + _MEASURE + body + _AFTER, re.IGNORECASE)
 
 
-def infer_amount(name: str | None, objectives_text: str | None) -> int | None:
-    """Find a count written directly before `name` in the sentence, or None.
-
-    "bring her 10 Red Silk Bandanas" + "Red Silk Bandana" -> 10. Every word is matched
-    by stem because the plural is not always on the last word ("Chunks of Boar Meat").
-    Quest text also shortens names ("7 Coastrunners" for Murloc Coastrunner), so when
-    the full name is not there, leading words are dropped one at a time. The last
-    word alone only counts when it is a real word of four letters or more.
-    """
-    if not name or not objectives_text:
-        return None
+def _tails(name: str):
+    """The name, then the name with leading words dropped: quest text shortens names
+    ("7 Coastrunners" for Murloc Coastrunner). A lone last word only counts when it is a
+    real word of four letters or more; a tail that starts after a number is never used
+    ("Super Reaper 6000 Blueprints": that 6000 is part of the name)."""
     words = name.split()
     for start in range(len(words)):
         tail = words[start:]
         if start > 0 and len(tail) == 1 and not (tail[0].isalpha() and len(tail[0]) >= 4):
-            break
-        if start > 0 and (words[start - 1].isdigit() or words[start - 1].lower() in _NUMBER_WORDS):
-            continue  # "Super Reaper 6000 Blueprints": that 6000 is part of the name
-        amount = _count_before(tail, objectives_text)
-        if amount is not None:
-            return amount
-    return None
+            return
+        if start > 0 and (words[start - 1].isdigit() or words[start - 1].lower() in _ONES
+                          or words[start - 1].lower() in _TENS):
+            continue
+        yield start == 0, tail
+
+
+def _candidates(name: str | None, text: str) -> list[tuple[int, int, bool]]:
+    """Every count token in `text` that could belong to `name`: (position, amount, full)."""
+    if not name:
+        return []
+    found: dict[int, tuple[int, int, bool]] = {}
+    for full, tail in _tails(name):
+        for match in _pattern(tail).finditer(text):
+            pos = match.start(1)
+            amount = _number(match.group(1))
+            if amount >= 1 and (pos not in found or full):
+                found[pos] = (pos, amount, full)
+    return sorted(found.values())
+
+
+def infer_amounts(names: list[str | None], objectives_text: str | None) -> list[int | None]:
+    """Counts for the objectives of one quest, read from its objectives sentence.
+
+    One count token serves one objective. Full-name matches are settled first, longest
+    name first, so "10 Black Dragonspawn" goes to Black Dragonspawn and not to Black Drake.
+    Shortened-name matches come after; a token that two objectives can only reach that way
+    ("the three pieces of Gelkak's Key") goes to neither.
+    """
+    result: list[int | None] = [None] * len(names)
+    if not objectives_text:
+        return result
+    text = objectives_text
+    candidates = [_candidates(n, text) for n in names]
+    by_length = sorted(range(len(names)),
+                       key=lambda i: (-len((names[i] or "").split()), -len(names[i] or ""), i))
+    taken: set[int] = set()
+    for i in by_length:
+        for pos, amount, full in candidates[i]:
+            if full and pos not in taken:
+                taken.add(pos)
+                result[i] = amount
+                break
+    for i in by_length:
+        if result[i] is not None:
+            continue
+        options = [(pos, amount) for pos, amount, full in candidates[i] if not full and pos not in taken]
+        if not options:
+            continue
+        pos, amount = options[0]
+        rivals = [k for k in by_length if k != i and result[k] is None
+                  and any(p == pos and not f for p, _, f in candidates[k])]
+        if rivals and not _EACH.match(text, pos):
+            continue
+        taken.add(pos)
+        result[i] = amount
+        for k in rivals:  # "7 Power Crystals of each color": the count is per objective
+            result[k] = amount
+    return result
+
+
+def infer_amount(name: str | None, objectives_text: str | None) -> int | None:
+    """One objective on its own; see infer_amounts."""
+    return infer_amounts([name], objectives_text)[0]
 
 
 # --------------------------------------------------------------------------
@@ -298,9 +391,9 @@ def build_objectives(
     if isinstance(trigger_text, str) and trigger_text.strip():
         drafts.append(_Draft("event", None, None, canonical_tokens(trigger_text.strip()), counted=False))
 
+    amounts = infer_amounts([d.target_name if d.counted else None for d in drafts], objectives_text)
     objectives = []
-    for idx, draft in enumerate(drafts, start=1):
-        amount = infer_amount(draft.target_name, objectives_text) if draft.counted else None
+    for idx, (draft, amount) in enumerate(zip(drafts, amounts), start=1):
         objectives.append(db.Objective(
             quest_id=quest_id, idx=idx, type=draft.type, target_id=draft.target_id,
             target_name=draft.target_name, amount=amount or 1,
@@ -311,14 +404,25 @@ def build_objectives(
 
 def turnin_name(finished_by: object, names: Names) -> str | None:
     """`finishedBy = { {npcIDs...}, {objectIDs...} }`: first NPC with a name, else first object."""
+    return turnin(finished_by, None, names)[0]
+
+
+def turnin(finished_by: object, started_by: object, names: Names) -> tuple[str | None, str | None]:
+    """The turn-in name and what it is: "giver" when the quest is handed back to an NPC who
+    also offers it ("Go back to"), "other" when it is a different NPC ("Go see"), "object"
+    for a mailbox, altar or barrel. `startedBy = { {npcIDs...}, {objectIDs...}, {itemIDs...} }`."""
     if not isinstance(finished_by, dict):
-        return None
-    for ids, table in ((finished_by.get(FINISHED_BY_NPCS), names.npc),
-                       (finished_by.get(FINISHED_BY_OBJECTS), names.object)):
-        for entity_id in _values(ids):
-            if entity_id in table:
-                return table[entity_id]
-    return None
+        return None, None
+    starters = set()
+    if isinstance(started_by, dict):
+        starters = {i for i in _values(started_by.get(FINISHED_BY_NPCS)) if isinstance(i, int)}
+    for entity_id in _values(finished_by.get(FINISHED_BY_NPCS)):
+        if entity_id in names.npc:
+            return names.npc[entity_id], "giver" if entity_id in starters else "other"
+    for entity_id in _values(finished_by.get(FINISHED_BY_OBJECTS)):
+        if entity_id in names.object:
+            return names.object[entity_id], "object"
+    return None, None
 
 
 def _joined_text(value: object) -> str | None:
@@ -352,7 +456,7 @@ def load(
     text = (cache_dir / QUEST_DB.filename).read_text(encoding="utf-8")
     keys = luatable.parse_key_enum(text, QUEST_DB.keys_name)
     body = luatable.extract_long_string(text, QUEST_DB.data_name)
-    wanted = ("name", "finishedBy", "requiredLevel", "questLevel", "objectivesText",
+    wanted = ("name", "startedBy", "finishedBy", "requiredLevel", "questLevel", "objectivesText",
               "objectives", "questFlags")
     missing = [k for k in wanted if k not in keys]
     if missing:
@@ -377,9 +481,10 @@ def load(
         if title is None and objectives_text is None:
             without_text += 1
             continue
+        turnin_npc, turnin_kind = turnin(row.get(keys["finishedBy"]), row.get(keys["startedBy"]), names)
         quest_row = db.QuestRow(
             id=quest_id, source=SOURCE, title=title, objectives_text=objectives_text,
-            turnin_npc=turnin_name(row.get(keys["finishedBy"]), names), fetched_at=fetched_at,
+            turnin_npc=turnin_npc, turnin_kind=turnin_kind, fetched_at=fetched_at,
         )
         if db.upsert_source_row(conn, quest_row):
             result.rows_written += 1

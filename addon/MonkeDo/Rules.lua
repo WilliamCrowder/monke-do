@@ -17,10 +17,11 @@ end
 
 -- Objective text arrives as "3/10 Red Silk Bandana" on Retail-style clients and as
 -- "Red Silk Bandana: 3/10" on Classic-style ones, with " slain" added for kills.
--- Returns name, have, need. have and need are nil when the text holds no count.
+-- Returns name, have, need, slain. have and need are nil when the text holds no count;
+-- slain says whether the text was a kill line ("Kobold Vermin slain").
 function Rules.ParseObjectiveText(text)
     if type(text) ~= "string" then
-        return "", nil, nil
+        return "", nil, nil, false
     end
     text = trim(text)
     local have, need, name = text:match("^(%d+)%s*/%s*(%d+)%s+(.+)$")
@@ -28,11 +29,10 @@ function Rules.ParseObjectiveText(text)
         name, have, need = text:match("^(.-)%s*:%s*(%d+)%s*/%s*(%d+)$")
     end
     if not name then
-        return text, nil, nil
+        name = text
     end
-    name = trim(name)
-    name = name:gsub("%s+slain$", "")
-    return name, tonumber(have), tonumber(need)
+    local stripped, slain = trim(name):gsub("%s+[Ss]lain$", "")
+    return stripped, tonumber(have), tonumber(need), slain > 0
 end
 
 local function stripFinalStop(s)
@@ -53,16 +53,33 @@ local function parseReputation(text)
     return faction, standing
 end
 
-local COUNTED = { monster = true, item = true, object = true }
+-- Objective types whose numRequired is a count of things. For the others (reputation,
+-- progress bars) the number is a threshold or a percentage.
+Rules.COUNTED = { monster = true, item = true, object = true }
+
+-- The game's own words, with one full stop. Text that brought its own "!" or "?" keeps it;
+-- pipeline/rules.py builds the same string.
+local function eventLine(text, voice)
+    local line = Voice.Format("event", voice, { text = text })
+    if text:find("[!?]$") then
+        line = (line:gsub("%.$", ""))
+    end
+    return line
+end
 
 -- One bullet, without progress.
 function Rules.Line(objective, voice)
     local kind = objective.type
     local text = objective.text or ""
-    if COUNTED[kind] then
-        local name, _, need = Rules.ParseObjectiveText(text)
-        need = objective.numRequired or need or 1
-        name = stripFinalStop(name)
+    local name, _, parsedNeed, slain = Rules.ParseObjectiveText(text)
+    name = stripFinalStop(name)
+    if kind == "monster" and not slain then
+        -- A credit objective with its own wording ("Find Mankrik's Wife", "Heal and fortify
+        -- Sentinel Shaya"): the target is not something to kill.
+        return eventLine(name, voice)
+    end
+    if Rules.COUNTED[kind] then
+        local need = objective.numRequired or parsedNeed or 1
         if need > 1 then
             return Voice.Format(kind, voice, { n = need, name = name })
         end
@@ -76,8 +93,7 @@ function Rules.Line(objective, voice)
         return Voice.Format("reputation_unknown", voice, { faction = faction })
     end
     -- event, spell, log, player, progressbar and anything new: keep the game's words.
-    local name = Rules.ParseObjectiveText(text)
-    return Voice.Format("event", voice, { text = stripFinalStop(name) })
+    return eventLine(name, voice)
 end
 
 -- "(3/15)", "(45%)", "(done)" or nil. Reputation is left out: raw standing numbers
@@ -107,9 +123,11 @@ function Rules.Progress(objective, voice)
     return nil
 end
 
-function Rules.TurnIn(npc, voice)
+-- `other` is true when the quest is handed in to someone the player was not sent back to
+-- (a different NPC, or a mailbox): "Go see" rather than "Go back to".
+function Rules.TurnIn(npc, voice, other)
     if npc and npc ~= "" then
-        return Voice.Format("turnin", voice, { npc = npc })
+        return Voice.Format(other and "turnin_other" or "turnin", voice, { npc = npc })
     end
     return Voice.Get("turnin_unknown", voice)
 end

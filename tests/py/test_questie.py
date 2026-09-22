@@ -192,17 +192,17 @@ def test_field_positions_come_from_the_files_own_key_enum(tmp_path):
     (cache / "classicQuestDB.lua").write_text(
         """QuestieDB.questKeys = {
             ['objectivesText'] = 1, ['name'] = 2, ['questFlags'] = 3, ['objectives'] = 4,
-            ['questLevel'] = 5, ['requiredLevel'] = 6, ['finishedBy'] = 7,
+            ['questLevel'] = 5, ['requiredLevel'] = 6, ['finishedBy'] = 7, ['startedBy'] = 8,
         }
         QuestieDB.questData = [[return {
-        [214] = {{"Bring her 10 Red Silk Bandanas."},"Red Silk Bandanas",8,{nil,nil,{{915}}},17,14,{{820}}},
+        [214] = {{"Bring her 10 Red Silk Bandanas."},"Red Silk Bandanas",8,{nil,nil,{{915}}},17,14,{{820}},{{820}}},
         }]]""",
         encoding="utf-8",
     )
     conn = db.connect()
     questie.load(conn, tmp_path, offline=True)
     row = conn.execute("SELECT * FROM source_rows WHERE id = 214").fetchone()
-    assert (row["title"], row["turnin_npc"]) == ("Red Silk Bandanas", "Scout Riell")
+    assert (row["title"], row["turnin_npc"], row["turnin_kind"]) == ("Red Silk Bandanas", "Scout Riell", "giver")
     assert _objectives(conn, 214) == [(1, "item", 915, "Red Silk Bandana", 10, "text", None)]
     meta = conn.execute("SELECT * FROM quest_meta WHERE quest_id = 214").fetchone()
     assert (meta["level"], meta["required_level"], meta["flags"]) == (17, 14, 8)
@@ -223,3 +223,64 @@ def test_trigger_end_comes_after_the_other_objectives():
     objectives = questie.build_objectives(1, field, "Kill 8 Gray Wolves and scout the den.", names,
                                           {1: "Scout the den"})
     assert [(o.idx, o.type, o.amount) for o in objectives] == [(1, "monster", 8), (2, "event", 1)]
+
+
+# Sentence shapes seen in the real data that the one-objective-at-a-time reader got wrong.
+@pytest.mark.parametrize(("names", "text", "expected"), [
+    # A sibling's count must not leak: "Dra" is not a stem of anything.
+    (["Black Broodling", "Black Dragonspawn", "Black Drake", "Black Wyrmkin"],
+     "Slay 15 Black Broodlings, 10 Black Dragonspawn, 4 Black Wyrmkin and 1 Black Drake.",
+     [15, 10, 1, 4]),
+    # A hyphenated continuation is a different creature.
+    (["Firegut Ogre Mage", "Firegut Ogre", "Firegut Brute"],
+     "Slay 15 Firegut Ogre-Mages, 7 Firegut Ogres, and 7 Firegut Ogre Brutes.",
+     [15, 7, None]),
+    # A capitalised continuation is a different creature.
+    (["Plaguehound Runt", "Plaguehound", "Frenzied Plaguehound"],
+     "Slay 20 Plaguehound Runts, 5 Plaguehounds and 5 Frenzied Plaguehounds.",
+     [20, 5, 5]),
+    # A named boss has no count; his guards' count is not his.
+    (["Ran Bloodtooth", "Bloodtooth Guard"], "Kill Ran Bloodtooth and 4 Bloodtooth Guards.", [None, 4]),
+    # One collective count that several objectives could claim goes to none of them.
+    (["Top of Gelkak's Key", "Middle of Gelkak's Key", "Bottom of Gelkak's Key"],
+     "Find and return the three pieces of Gelkak's Key to Gelkak Gyromast.", [None, None, None]),
+    (["Amber Voodoo Feather", "Blue Voodoo Feather", "Green Voodoo Feather"],
+     "Bring a total of 6 Voodoo Feathers from the trolls.", [None, None, None]),
+    # Number words, including compounds.
+    (["Robo-mechanical Guts"], "Bring twenty-four Robo-mechanical Guts to Shoni.", [24]),
+    (["Iron Bar", "Mithril Bar"], "Bring forty Mithril Bars and forty Iron Bars to Galvan.", [40, 40]),
+    # Plural spellings.
+    (["Harpy", "Young Wolf", "Lockbox"], "Kill 6 Harpies and 8 Young Wolves, then open 2 Lockboxes.", [6, 8, 2]),
+    # Nothing to read.
+    (["Sack of Barley"], "Bring a Sack of Barley to the miller.", [None]),
+    (["Anything"], None, [None]),
+])
+def test_infer_amounts_assigns_each_count_once(names, text, expected):
+    assert questie.infer_amounts(names, text) == expected
+
+
+def test_a_count_marked_each_goes_to_every_sibling():
+    names = ["Red Power Crystal", "Yellow Power Crystal", "Green Power Crystal", "Blue Power Crystal"]
+    text = "Collect 7 Power Crystals of each color: red, blue, yellow, and green. Bring them to J.D. Collie."
+    assert questie.infer_amounts(names, text) == [7, 7, 7, 7]
+
+
+@pytest.mark.parametrize(("name", "text", "expected"), [
+    ("Defias Highwayman", "kill 15 Defias Highwaymen", 15),
+    ("Gordunni Ogre Mage", "kill 10 Gordunni Ogre-Magi", 10),
+    ("Boulderfist Magus", "kill 4 Boulderfist Magi", 4),
+    ("Twitching Antenna", "Bring 5 twitching antennae", 5),
+    ("Trogg Stone Tooth", "Bring 8 Trogg Stone Teeth", 8),
+    ("Corrupted Brain Stem", "wants 8 Corrupt Brain stems.", 8),
+])
+def test_plural_spellings(name, text, expected):
+    assert questie.infer_amount(name, text) == expected
+
+
+def test_turnin_kind_tells_the_giver_from_a_delivery_target():
+    names = questie.Names(npc={820: "Scout Riell", 234: "Gryan Stoutmantle"}, item={}, object={2704: "Broken Barrel"})
+    assert questie.turnin({1: {1: 820}}, {1: {1: 820}}, names) == ("Scout Riell", "giver")
+    assert questie.turnin({1: {1: 234}}, {1: {1: 820}}, names) == ("Gryan Stoutmantle", "other")
+    assert questie.turnin({2: {1: 2704}}, {1: {1: 820}}, names) == ("Broken Barrel", "object")
+    assert questie.turnin({1: {1: 234}}, None, names) == ("Gryan Stoutmantle", "other")
+    assert questie.turnin(None, None, names) == (None, None)

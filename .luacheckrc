@@ -34,5 +34,6 @@ read_globals = {
 files["tests/lua"] = {
     std = "+busted",
     global = false,
+    self = false,            -- no-op stub methods keep the colon syntax of the real widgets
     max_line_length = false, -- expected strings read better on one line
 }

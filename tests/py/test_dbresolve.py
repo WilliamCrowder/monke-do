@@ -101,3 +101,40 @@ def test_upsert_skips_unchanged_text_and_stores_null_not_empty():
     assert db.upsert_source_row(conn, _row(3, "questie", title="Changed", turnin_npc="New NPC")) is True
     stored = conn.execute("SELECT detail, title FROM source_rows WHERE id = 3").fetchone()
     assert stored["detail"] is None and stored["title"] == "Changed"
+
+
+def test_db2_rows_keep_the_names_of_the_rows_they_replace():
+    conn = db.connect()
+    db.replace_objectives(conn, 9001, [
+        db.Objective(9001, 1, "monster", 9201, "Gray Wolf", 8, "text", None, "questie"),
+        db.Objective(9001, 2, "monster", 9202, "Ridge Stalker", 5, "text", "Ridge Stalkers hunted", "questie"),
+    ])
+    kept = db.replace_objectives(conn, 9001, [
+        db.Objective(9001, 1, "monster", 9202, None, 6, "db2", None, "wago"),  # wago orders them differently
+        db.Objective(9001, 2, "monster", 9201, None, 8, "db2", None, "wago"),
+        db.Objective(9001, 3, "item", 9404, None, 1, "db2", None, "wago"),      # new, no name anywhere
+    ])
+    assert kept is True
+    rows = [(o["idx"], o["target_name"], o["amount"], o["amount_source"], o["text"]) for o in db.get_objectives(conn, 9001)]
+    assert rows == [(1, "Ridge Stalker", 6, "db2", "Ridge Stalkers hunted"), (2, "Gray Wolf", 8, "db2", None),
+                    (3, None, 1, "db2", None)]
+    # and a weaker source cannot undo db2 amounts
+    assert db.replace_objectives(conn, 9001, [
+        db.Objective(9001, 1, "monster", 9201, "Gray Wolf", 8, "text", None, "questie")]) is False
+    assert db.get_objectives(conn, 9001)[0]["amount_source"] == "db2"
+
+
+def test_amounts_follow_the_sentence_that_wins():
+    from pipeline.sources.questie import infer_amounts
+
+    conn = db.connect()
+    db.upsert_source_row(conn, db.QuestRow(id=214, source="questie", title="Red Silk Bandanas",
+                                           objectives_text="Bring her 10 Red Silk Bandanas.", fetched_at="2026-01-01T00:00:00Z"))
+    db.replace_objectives(conn, 214, [db.Objective(214, 1, "item", 915, "Red Silk Bandana", 10, "text", None, "questie")])
+    db.upsert_source_row(conn, db.QuestRow(id=214, source="wowforevertalents", title="Red Silk Bandanas",
+                                           objectives_text="Scout Riell wants you to bring her 6 Red Silk Bandanas.",
+                                           fetched_at="2026-02-01T00:00:00Z"))
+    db.resolve_quests(conn)
+    assert db.reconcile_amounts(conn, infer_amounts) == 1
+    assert (db.get_objectives(conn, 214)[0]["amount"], db.get_objectives(conn, 214)[0]["amount_source"]) == (6, "text")
+    assert db.reconcile_amounts(conn, infer_amounts) == 0  # settled

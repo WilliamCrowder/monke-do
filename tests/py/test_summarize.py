@@ -95,7 +95,7 @@ def prompt_examples() -> list[tuple[str, dict]]:
     blocks = re.findall(r"```(json)?\n(.*?)\n```", text, flags=re.DOTALL)
     inputs = [body for lang, body in blocks if not lang]
     outputs = [json.loads(body) for lang, body in blocks if lang]
-    assert len(inputs) == len(outputs) == 3
+    assert len(inputs) == len(outputs) == 4
     return list(zip(inputs, outputs))
 
 
@@ -104,6 +104,13 @@ EXAMPLE_CONTEXTS = [
                  turnin_npc="Scout Riell", objectives=[
                      {"type": "item", "target_name": "Red Silk Bandana", "amount": 10,
                       "amount_source": "text"}]),
+    QuestContext(
+        id=90377, title="Word for the Warden",
+        objectives_text=("Take Halla's Note to Warden Ostrel at the river camp, and see that Sentinel "
+                         "Shaya is patched up on the way."),
+        turnin_npc="Warden Ostrel", turnin_kind="other", objectives=[
+            {"type": "monster", "target_name": "Sentinel Shaya", "amount": 1,
+             "amount_source": "default", "text": "Heal and fortify Sentinel Shaya"}]),
     QuestContext(
         id=90412, title="Trouble at the Old Mill",
         detail=("Those Mudsnout gnolls have overrun the old mill, $n. They chewed through every "
@@ -126,7 +133,7 @@ EXAMPLE_CONTEXTS = [
 ]
 
 
-@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize("index", [0, 1, 2, 3])
 def test_prompt_examples_match_the_real_message_format_and_pass_the_validator(index: int) -> None:
     shown_input, shown_output = prompt_examples()[index]
     ctx = EXAMPLE_CONTEXTS[index]
@@ -622,3 +629,69 @@ def test_missing_anthropic_package_gives_install_hint(monkeypatch, provider_clas
 
 def test_anthropic_is_not_imported_by_the_pipeline_modules() -> None:
     assert "anthropic" not in sys.modules or sys.modules["anthropic"] is None
+
+
+def test_the_log_never_shadows_a_summaries_file_or_a_retry(tmp_path: Path, no_overrides: Path) -> None:
+    """A paid run logged a bad answer for 214. A later file run must read the file, and a
+    retry that forgot the rejected row must reach the provider again."""
+    log_path = tmp_path / "responses.jsonl"
+
+    def bad_fn(request: SummaryRequest) -> str:
+        return json.dumps(BAD_214) if request.quest_id == 214 else good_fn(request)
+
+    run(make_db(), PaidFake(bad_fn), no_overrides, log_path=log_path)
+
+    path = tmp_path / "answers.jsonl"
+    path.write_text(json.dumps({"id": 214, **GOOD[214]}) + "\n", encoding="utf-8")
+    conn = make_db()
+    stats = run(conn, FileProvider(path), no_overrides, log_path=log_path)
+    assert (stats["replayed"], row(conn, 214)["status"]) == (0, "ok")
+
+    conn = make_db()
+    provider = PaidFake(good_fn)
+    stats = run(conn, provider, no_overrides, log_path=log_path, no_replay={214})
+    assert 214 in [r.quest_id for batch in provider.calls for r in batch]
+    assert row(conn, 214)["status"] == "ok"
+
+
+def test_a_partial_collect_leaves_the_rest_of_the_batch_open(fake_anthropic, tmp_path: Path) -> None:
+    """Run 1 submits two quests and dies. Run 2 asks for one of them (--ids). Run 3 asks
+    for the other: it must come from the same batch, never be submitted again."""
+    state = tmp_path / "cache" / "batches.jsonl"
+    reqs = requests_for(214, 7)
+
+    class Interrupted(FakeBatches):
+        def retrieve(self, batch_id):
+            raise KeyboardInterrupt
+
+    first = AnthropicBatchProvider(client=NS(messages=NS(batches=Interrupted(0, None))),
+                                   state_path=state, log=lambda _: None)
+    with pytest.raises(KeyboardInterrupt):
+        first.summarize_many(reqs)
+
+    def results(_created):
+        return [NS(custom_id=first._key(r), result=NS(type="succeeded", message=message(json.dumps(GOOD[214]))))
+                for r in reqs]
+
+    batches = FakeBatches(polls_before_end=0, results_for=results)
+    second = AnthropicBatchProvider(client=NS(messages=NS(batches=batches)), state_path=state, log=lambda _: None)
+    assert set(second.summarize_many([reqs[0]])) == {214}
+    third = AnthropicBatchProvider(client=NS(messages=NS(batches=batches)), state_path=state, log=lambda _: None)
+    assert set(third.summarize_many([reqs[1]])) == {7}
+    assert batches.created == []  # both answers came from the first batch
+    assert list(third._unfinished_batches()) == []
+
+
+def test_direct_provider_hands_over_each_paid_answer_as_it_arrives(fake_anthropic) -> None:
+    seen: list[int] = []
+
+    def create(**params):
+        if len(seen) == 1:
+            raise fake_anthropic.AuthenticationError("token expired", 401)
+        return message(json.dumps(GOOD[214]))
+
+    provider = AnthropicDirectProvider(client=NS(messages=NS(create=create)))
+    provider.on_result(lambda request, text: seen.append(request.quest_id))
+    with pytest.raises(fake_anthropic.AuthenticationError):
+        provider.summarize_many(requests_for(1, 2, 3))
+    assert seen == [1]  # the one answer paid for before the failure was handed over

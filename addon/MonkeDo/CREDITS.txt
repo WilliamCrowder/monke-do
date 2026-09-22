@@ -1,0 +1,17 @@
+Monke Do
+========
+
+Copyright (C) 2026 Will Crowder and contributors.
+Licensed under the GNU General Public License, version 3 (GPL-3.0-only). See LICENSE.
+
+Quest data
+----------
+Data/MonkeDB.lua is derived in part from the Questie database:
+  https://github.com/Questie/Questie
+  https://github.com/Questie/QuestieDB
+published under the GNU GPL v3 by the Questie project and its contributors.
+Monke Do takes quest titles, objective sentences, target names and turn-in names from it,
+and adds its own summaries and task lines. The generated file states the build and date it
+was made. The pipeline that makes it is in the Monke Do repository.
+
+World of Warcraft and its quest text are the property of Blizzard Entertainment.
