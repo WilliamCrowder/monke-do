@@ -1,10 +1,12 @@
 -- Now.lua: the Now line. One small frame above the objective tracker that says the ONE next
--- thing to do for the super-tracked quest, and how far away it is:
+-- thing to do for the super-tracked quest, and how far away it is, on one line:
 --     Now: Grab 10 Red Silk Bandana (3/10) · 120 yards
---     Way: Take the boat to Menethil Harbor
--- Left-click is Monke pick, right-click opens the quest on the map (out of combat only),
--- left-drag moves it. It is the addon's own frame, not a hook into Blizzard's tracker, it is
--- not secure, and nothing it calls is protected; opening the map is the one guarded call.
+-- The tooltip adds the full line (in case it was cut), the game's route ("Way: Take the boat to
+-- Menethil Harbor") and the actions. Left-click is Monke pick, left-drag moves it.
+-- It is the addon's own frame, not a hook into Blizzard's tracker, and it is not secure.
+-- It never calls Blizzard's map code (QuestMapFrame_*): doing that from addon code leaves the
+-- map and tracker state tainted, and Blizzard's next redraw of them in combat is blocked. The
+-- quest is super-tracked, so the M key and Blizzard's arrow already show it.
 
 local _, ns = ...
 
@@ -19,9 +21,11 @@ ns.Now = Now
 
 local WIDTH = 260          -- when the objective tracker cannot tell us its width
 local MIN_HEIGHT = 20
-local PAD = 6
-local LINE_GAP = 2
-local TRACKER_GAP = 4      -- between the line's bottom edge and the tracker's top
+local PAD = 3
+-- Between the line's bottom edge and the tracker's top. The frames Edit Mode stacks above the
+-- tracker (durability figure, boss frames) can leave as little as 25 px, so the line stays one
+-- line and hugs the tracker.
+local TRACKER_GAP = 1
 local REFRESH_DELAY = 0.2  -- QUEST_LOG_UPDATE comes in bursts; redraw once per burst
 local TICK_SECONDS = 1     -- how often the distance is read while a quest is on the line
 local MESSAGE_SECONDS = 3  -- how long a message ("after the fight") stays up
@@ -44,7 +48,7 @@ local enabled = false
 local frame
 local questShown          -- the quest on the line; nil while it shows the invitation
 local stepShown           -- that quest's next step, without the distance
-local lineShown, wayShown -- the text on screen, so an unchanged redraw costs nothing
+local lineShown           -- the text on screen, so an unchanged redraw costs nothing
 local refreshPending = false
 local ticker
 local message, messageUntil
@@ -148,32 +152,19 @@ end
 
 -- Drawing -----------------------------------------------------------------------------------
 
--- `wayLine` is the second line, or nil for none.
-local function setLines(line, wayLine)
-    if line == lineShown and wayLine == wayShown then
+-- One line, never wrapped: a second line would grow up into the frames above the tracker.
+local function setLine(line)
+    if line == lineShown then
         return
     end
-    lineShown, wayShown = line, wayLine
+    lineShown = line
     frame.monkeLine:SetText(line)
-    if wayLine then
-        frame.monkeWay:SetText(wayLine)
-        frame.monkeWay:Show()
-    else
-        frame.monkeWay:SetText("")
-        frame.monkeWay:Hide()
-    end
-    local height = PAD * 2 + (frame.monkeLine:GetStringHeight() or 0)
-    if wayLine then
-        height = height + LINE_GAP + (frame.monkeWay:GetStringHeight() or 0)
-    end
-    frame:SetHeight(math.max(MIN_HEIGHT, height))
+    frame:SetHeight(math.max(MIN_HEIGHT, PAD * 2 + (frame.monkeLine:GetStringHeight() or 0)))
 end
 
--- "Now: <next step> · <distance>", and the waypoint line when the game has one.
+-- "Now: <next step> · <distance>".
 local function drawQuest(voice)
-    local way = waypointText(questShown)
-    setLines(Voice.Get("now_prefix", voice) .. withDistance(stepShown, questShown, voice),
-        way and Voice.Format("now_way", voice, { text = way }) or nil)
+    setLine(Voice.Get("now_prefix", voice) .. withDistance(stepShown, questShown, voice))
 end
 
 local function messageUp()
@@ -215,17 +206,17 @@ function Now.Refresh()
     questShown = trackedQuest()
     stepShown = questShown and Now.NextStep(questShown, voice) or nil
     if messageUp() then
-        setLines(message, nil)
+        setLine(message)
     elseif questShown then
         drawQuest(voice)
     else
-        setLines(Voice.Get("now_nothing", voice), nil)
+        setLine(Voice.Get("now_nothing", voice))
     end
     frame:Show()
     updateTicker()
 end
 
--- Between events only the distance and the waypoint move, so the ticker redraws just those.
+-- Between events only the distance moves, so the ticker redraws just that.
 function Now.Tick()
     if not (frame and frame:IsShown() and questShown and stepShown) or messageUp() then
         return
@@ -285,25 +276,6 @@ function Now.Cue()
     return true
 end
 
--- Right-click. Opening the map is the one call that can be blocked in combat, so it waits.
-function Now.OpenMap()
-    if not questShown then
-        return false
-    end
-    if InCombatLockdown and InCombatLockdown() then
-        local text = Voice.Get("now_combat", Core.Get("voice"))
-        if not Now.Say(text) then
-            Core.Print(text)
-        end
-        return false
-    end
-    if not QuestMapFrame_OpenToQuestDetails then
-        return false
-    end
-    QuestMapFrame_OpenToQuestDetails(questShown)
-    return true
-end
-
 -- Position ----------------------------------------------------------------------------------
 
 local function savedPoint()
@@ -335,8 +307,7 @@ function Now.PlaceFrame()
     local width = lineWidth()
     frame:SetWidth(width)
     frame.monkeLine:SetWidth(width - PAD * 2)
-    frame.monkeWay:SetWidth(width - PAD * 2)
-    lineShown, wayShown = nil, nil -- measure the height again on the next draw
+    lineShown = nil -- measure the height again on the next draw
 
     frame:ClearAllPoints()
     local saved = savedPoint()
@@ -377,10 +348,15 @@ local function showTooltip(self)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
     GameTooltip:SetText(questShown and questTitle(questShown) or "Monke Do")
     if GameTooltip.AddLine then
-        GameTooltip:AddLine(Voice.Get("now_tip_click", voice), 1, 1, 1)
-        if questShown then
-            GameTooltip:AddLine(Voice.Get("now_tip_map", voice), 1, 1, 1)
+        if questShown and stepShown then
+            -- The whole line, which a narrow tracker may have cut, and the game's route.
+            GameTooltip:AddLine(withDistance(stepShown, questShown, voice), 1, 0.82, 0, true)
+            local way = waypointText(questShown)
+            if way then
+                GameTooltip:AddLine(Voice.Format("now_way", voice, { text = way }), 0.8, 0.8, 0.8, true)
+            end
         end
+        GameTooltip:AddLine(Voice.Get("now_tip_click", voice), 1, 1, 1)
         GameTooltip:AddLine(Voice.Get("now_tip_drag", voice), 1, 1, 1)
     end
     GameTooltip:Show()
@@ -428,7 +404,7 @@ local function createFrame()
     f:SetClampedToScreen(true)
     f:SetMovable(true)
     f:EnableMouse(true)
-    f:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    f:RegisterForClicks("LeftButtonUp")
     f:RegisterForDrag("LeftButton")
 
     local background = f:CreateTexture(nil, "BACKGROUND")
@@ -452,23 +428,18 @@ local function createFrame()
     local line = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium") -- a size up from the tracker
     line:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -PAD)
     line:SetJustifyH("LEFT")
-    line:SetWordWrap(true)
-    local way = body:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    way:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -LINE_GAP)
-    way:SetJustifyH("LEFT")
-    way:SetWordWrap(true)
-    way:SetTextColor(0.8, 0.8, 0.8)
-    way:Hide()
-    f.monkeLine, f.monkeWay = line, way
+    line:SetWordWrap(false) -- one line; the tooltip has the rest
+    if line.SetMaxLines then
+        line:SetMaxLines(1)
+    end
+    f.monkeLine = line
 
     f:SetScript("OnClick", function(self, button)
         -- The mouse-up that ends a drag is not a click.
         if self.monkeDragging or (self.monkeDraggedAt and GetTime and GetTime() - self.monkeDraggedAt < 0.3) then
             return
         end
-        if button == "RightButton" then
-            Now.OpenMap()
-        else
+        if button == "LeftButton" then
             Pick.Next()
         end
     end)

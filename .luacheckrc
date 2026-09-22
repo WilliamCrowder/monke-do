@@ -12,7 +12,6 @@ globals = {
     "MonkeDoDB",
     "MonkeDo_OnAddonCompartmentClick",
     "MonkeDo_Pick",                 -- called by the key binding in Bindings.xml
-    "BINDING_HEADER_MONKEDO",
     "BINDING_NAME_MONKEDO_PICK",
     "SLASH_MONKEDO1",
     "SLASH_MONKEDO2",
@@ -37,7 +36,9 @@ read_globals = {
     "WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL",
     -- Now line and Monke pick
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
-    "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails",
+    "PlaySound", "SOUNDKIT", "issecretvalue",
+    -- Deliberately NOT here: QuestMapFrame_* and other Blizzard map/tracker functions. Calling them
+    -- from addon code taints the map and tracker; luacheck flags any use as an undefined global.
 }
 
 -- The stubs and specs build a fake client out of globals on purpose.

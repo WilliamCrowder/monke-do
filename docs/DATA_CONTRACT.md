@@ -259,6 +259,14 @@ These correct assumptions in the build plan. Workers rely on these, not the plan
 - The Forever beta API dump (Thunderz96/forever-addon-kit) confirms the quest
   frame globals, `C_QuestLog.GetQuestObjectives`, `GetSuggestedGroupSize`,
   `QuestObjectiveTracker` and `AddonCompartmentFrame` exist.
+- The Forever client's own UI source is public: branch `forever` of
+  https://github.com/Gethe/wow-ui-source (1.60.1.69913). It loads the Mainline quest frame,
+  map and tracker files plus small `Camelot` overrides. Check Blizzard behaviour there first.
+- Calling Blizzard's map code from addon code (`QuestMapFrame_OpenToQuestDetails` and the
+  like) leaves the map and tracker state tainted, and their next refresh in combat is
+  blocked. The Now line therefore never opens the map; super-tracking is enough.
+- In the keybinding screen, `header=` entries are drawn as blank spacer rows; the addon name
+  goes into the binding label.
 - The BigWigs packager maps interface `16???` to game type `forever`
   (alias `camelot`, TOC suffix `_Camelot`). It packages tracked files only.
 - Real busted sandboxes each spec file: a bare global assignment in a spec never

@@ -15,9 +15,18 @@ Monke get: 875 XP, 4s
 - Two voices: **Monke** and **Plain English**. Same information, with or without the joke.
 - Live progress on every task, straight from the game.
 - A toggle on the quest frame (and `/monke lore`) restores Blizzard's text exactly.
-- Every quest gets a task list, even ones the database has not seen yet.
+- Every quest gets a task list, even ones the database has not seen yet. Quests without a
+  summary show the game's own one-line version, never the wall of text.
+- The quest log shows your tasks once, at the top, under "Monke do:".
+- **The Now line**: one line above the quest tracker with the single next thing to do for the
+  quest you are following, and how far away it is: `Now: Grab 10 Red Silk Bandana (3/10) ·
+  240 yd`. It pulses after a loading screen or a fight, for "what was I doing?".
+- **Monke pick**: "which quest now?" in one key. It picks a quest you can hand in, otherwise the
+  nearest one, and points the game's own arrow at it. Press again for another. Set the key in
+  Options > Keybindings > AddOns, or click the Now line, or type `/monke pick`.
 
-`/monke` opens the settings. `/monke help` lists the commands.
+`/monke` opens the settings. `/monke help` lists the commands. `/monke now off` hides the Now
+line; `/monke now reset` puts it back above the tracker.
 
 ## What it collects
 

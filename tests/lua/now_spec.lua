@@ -37,11 +37,22 @@ describe("Now line", function()
         return frame.monkeLine:GetText()
     end
 
-    local function way()
-        if not frame.monkeWay:IsShown() then
-            return nil
-        end
-        return frame.monkeWay:GetText()
+    -- A GameTooltip that records its lines, as the Now line fills it on hover.
+    local function installTip()
+        local tip = { lines = {} }
+        function tip:SetOwner(owner) self.owner = owner end
+        function tip:SetText(text) self.lines = { text } end
+        function tip:AddLine(text) self.lines[#self.lines + 1] = text end
+        function tip:Show() self.shown = true end
+        function tip:Hide() self.shown = false end
+        _G.GameTooltip = tip
+        return tip
+    end
+
+    local function tipLines()
+        local tip = installTip()
+        frame.scripts.OnEnter(frame)
+        return tip.lines
     end
 
     local function activeTickers()
@@ -79,12 +90,18 @@ describe("Now line", function()
             assert.is_true(frame:IsShown())
         end)
 
-        it("moves with a left-drag, stays on screen and takes both mouse buttons", function()
+        it("moves with a left-drag, stays on screen and takes the left button only", function()
             assert.is_true(frame.movable)
             assert.is_true(frame.clamped)
             assert.is_true(frame.mouse)
             assert.are.same({ "LeftButton" }, frame.dragButtons)
-            assert.are.same({ "LeftButtonUp", "RightButtonUp" }, frame.clickButtons)
+            assert.are.same({ "LeftButtonUp" }, frame.clickButtons)
+        end)
+
+        it("is one line that never wraps, so it cannot grow into the frames above the tracker", function()
+            assert.is_false(frame.monkeLine.wordWrap)
+            assert.are.equal(1, frame.monkeLine.maxLines)
+            assert.is_nil(frame.monkeWay)
         end)
 
         it("takes the tracker's width when the tracker has one", function()
@@ -92,14 +109,13 @@ describe("Now line", function()
             ObjectiveTrackerFrame:SetWidth(240)
             start()
             assert.are.equal(240, frame:GetWidth())
-            assert.are.equal(228, frame.monkeLine:GetWidth())
+            assert.are.equal(234, frame.monkeLine:GetWidth())
         end)
     end)
 
     describe("what it says", function()
         it("invites a pick when nothing is tracked, and the click picks", function()
             assert.are.equal(INVITE, line())
-            assert.is_nil(way())
             bandanas()
             WowStubs.click(frame, "LeftButton")
             assert.are.equal(214, WowStubs.superTracked)
@@ -176,27 +192,24 @@ describe("Now line", function()
             assert.are.equal("Now: Go back. Get shiny.", line())
         end)
 
-        it("puts the game's waypoint on a second line, in the player's voice", function()
+        it("keeps the game's route off the line and in the tooltip, in the player's voice", function()
             bandanas({ waypoint = "Take the boat to Menethil Harbor" })
             track(214)
-            assert.are.equal("Way: Take the boat to Menethil Harbor", way())
+            assert.are.equal(TAKE .. DOT .. "120 yards", line())
+            assert.are.equal("Way: Take the boat to Menethil Harbor", tipLines()[3])
             ns.Core.Set("voice", "plain")
-            assert.are.equal("Next: Take the boat to Menethil Harbor", way())
-            ns.Core.Set("voice", "monke")
-            track(0)
-            assert.is_nil(way())
+            assert.are.equal("Next: Take the boat to Menethil Harbor", tipLines()[3])
         end)
 
-        it("leaves out a waypoint that is empty or secret", function()
+        it("leaves out a route that is empty or secret", function()
             _G.issecretvalue = function(value)
                 return value == "Secret way"
             end
             bandanas({ waypoint = "" })
             track(214)
-            assert.is_nil(way())
+            assert.are.equal(4, #tipLines()) -- title, whole line, click, drag
             WowStubs.log[1].waypoint = "Secret way"
-            WowStubs.fire("SUPER_TRACKING_CHANGED")
-            assert.is_nil(way())
+            assert.are.equal(4, #tipLines())
         end)
     end)
 
@@ -252,59 +265,40 @@ describe("Now line", function()
     end)
 
     describe("clicks", function()
-        it("right-click opens the quest on the map out of combat", function()
+        -- Blizzard's map code run from addon code leaves the map and tracker state tainted, and
+        -- their next redraw in combat is blocked; the M key shows the super-tracked quest.
+        it("right-click does nothing, and the line never calls Blizzard's map code", function()
+            _G.QuestMapFrame_OpenToQuestDetails = function()
+                error("the Now line must not call Blizzard's map code")
+            end
+            WowStubs.click(frame, "RightButton")
+            assert.are.equal(INVITE, line())
+            assert.are.equal(0, WowStubs.superTracked)
             bandanas()
             track(214)
             WowStubs.click(frame, "RightButton")
-            assert.are.equal(214, WowStubs.openedQuest)
-        end)
-
-        it("right-click in combat waits for the end of the fight and says so", function()
-            bandanas()
-            track(214)
-            WowStubs.inCombat = true
-            WowStubs.click(frame, "RightButton")
-            assert.is_nil(WowStubs.openedQuest)
-            assert.are.equal("Monke busy bonking. Map after fight.", line())
-            WowStubs.advance(3)
+            assert.are.equal(214, WowStubs.superTracked)
             assert.are.equal(TAKE .. DOT .. "120 yards", line())
-            ns.Core.Set("voice", "plain")
-            WowStubs.click(frame, "RightButton")
-            assert.are.equal("In combat. Right-click again after the fight.", line())
-            WowStubs.inCombat = false
-            WowStubs.click(frame, "RightButton")
-            assert.are.equal(214, WowStubs.openedQuest)
         end)
 
         it("a pick replaces a message at once", function()
             bandanas()
             track(214)
-            WowStubs.inCombat = true
-            WowStubs.click(frame, "RightButton")
-            assert.are.equal("Monke busy bonking. Map after fight.", line())
+            Now.Say("Hello")
+            assert.are.equal("Hello", line())
             WowStubs.click(frame, "LeftButton") -- the only quest again: no event from the game
             assert.are.equal(TAKE .. DOT .. "120 yards", line())
-            WowStubs.click(frame, "RightButton")
+            WowStubs.log = {}
+            WowStubs.click(frame, "LeftButton") -- nothing left to pick
+            assert.are.equal("No quest. Monke go find quest giver.", line())
             WowStubs.addLogQuest({ questID = 400, title = "A Letter", objectives = {} })
             WowStubs.click(frame, "LeftButton") -- a new quest: SUPER_TRACKING_CHANGED
             assert.are.equal(400, WowStubs.superTracked)
             assert.are.equal("Now: Go back. Get shiny.", line())
         end)
 
-        it("right-click does nothing when nothing is tracked", function()
-            WowStubs.click(frame, "RightButton")
-            assert.is_nil(WowStubs.openedQuest)
-            assert.are.equal(INVITE, line())
-        end)
-
-        it("the tooltip names the quest and the actions", function()
-            local tip = { lines = {} }
-            function tip:SetOwner(owner) self.owner = owner end
-            function tip:SetText(text) self.lines = { text } end
-            function tip:AddLine(text) self.lines[#self.lines + 1] = text end
-            function tip:Show() self.shown = true end
-            function tip:Hide() self.shown = false end
-            _G.GameTooltip = tip
+        it("the tooltip names the quest, gives the whole line and the actions", function()
+            local tip = installTip()
             frame.scripts.OnEnter(frame)
             assert.are.same({ "Monke Do", "Click: Monke pick quest. Click again: other quest.", "Drag: move line." },
                 tip.lines)
@@ -312,8 +306,8 @@ describe("Now line", function()
             track(214)
             frame.scripts.OnEnter(frame)
             assert.are.equal(frame, tip.owner)
-            assert.are.same({ "Red Silk Bandanas", "Click: Monke pick quest. Click again: other quest.",
-                "Right-click: see quest on map.", "Drag: move line." }, tip.lines)
+            assert.are.same({ "Red Silk Bandanas", "Take 10 Red Silk Bandana off bad men (3/10)" .. DOT .. "120 yards",
+                "Click: Monke pick quest. Click again: other quest.", "Drag: move line." }, tip.lines)
             assert.is_true(tip.shown)
             frame.scripts.OnLeave(frame)
             assert.is_false(tip.shown)
@@ -474,9 +468,8 @@ describe("Now line", function()
             entry.objectives[1].numFulfilled = 5
             WowStubs.fire("QUEST_LOG_UPDATE")
             assert.are.equal("Now: Take 10 Red Silk Bandana off bad men (5/10)" .. DOT .. "120 yards", line())
-            WowStubs.inCombat = true
-            WowStubs.click(frame, "RightButton")
-            assert.are.equal("Monke busy bonking. Map after fight.", line())
+            Now.Say("Hello")
+            assert.are.equal("Hello", line())
             WowStubs.fire("PLAYER_ENTERING_WORLD")
             WowStubs.advance(3)
             WowStubs.fire("QUEST_LOG_UPDATE") -- the message is over; the next redraw shows the quest

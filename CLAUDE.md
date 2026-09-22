@@ -32,8 +32,11 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
 - Web fetchers run only when named in `--sources`, never from tests or CI. There is no Wowhead
   fetcher on purpose (its terms forbid scraping).
 - Never make a real LLM API call from tests. Providers are exercised with fakes.
-- The game cannot be run from here. Anything in `Display.lua` or `Tracker.lua` needs a line in
-  `docs/INGAME_CHECKLIST.md` for the human to check.
+- The game cannot be run from here. Anything in `Display.lua`, `Tracker.lua` or `Now.lua` needs a
+  line in `docs/INGAME_CHECKLIST.md` for the human to check. Check Blizzard behaviour against the
+  real Forever UI source: branch `forever` of https://github.com/Gethe/wow-ui-source.
+- Never call Blizzard's map or tracker functions from addon code (taint); reading their frames
+  and super-tracking are fine.
 - Specs must stay inside the busted subset listed at the top of `tests/lua/mini_busted.lua`.
 
 ## Layout
@@ -48,5 +51,13 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
 - `pipeline/out/translate/` holds the chunked requests, the writers' output and the editors'
   corrections for summaries written by Claude Code subagents (`python -m pipeline requests
   --chunk-size 120`, then `summarize --provider file --summaries-file <out> --summaries-file <fix>`).
-- `tests/lua/wow_stubs.lua` is the fake WoW client used by the specs.
+- `tests/lua/wow_stubs.lua` is the fake WoW client used by the specs. It mimics Blizzard's
+  quest templates (the log view builds Blizzard's own objective list; headers keep their text
+  across redraws; parchment colours by default, `WowStubs.stone()` for Quest Text Contrast),
+  a quest log (`WowStubs.addLogQuest`), super-tracking, and timers that run only on
+  `WowStubs.advance(seconds)`.
+- Addon modules: `Voice` (all player-facing words), `Rules` (live objective to bullet),
+  `Compose` (pure: inputs to the text that is shown), `Core` (settings, slash commands),
+  `Display` (quest frame hooks), `Tracker` (tracker lines), `Pick` (Monke pick: rank the log,
+  super-track one), `Now` (the Now line frame). `Bindings.xml` is loaded by the client itself.
 - `tools/make_media.py` rebuilds the 64x64 icons from the source art.

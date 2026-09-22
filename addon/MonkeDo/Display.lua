@@ -262,6 +262,9 @@ function Display.ApplyQuestInfo()
     if objectivesFrame and type(objectivesFrame.Objectives) == "table" then
         for _, line in ipairs(objectivesFrame.Objectives) do
             if logView and shown(line) then
+                if line.SetHeight then
+                    line:SetHeight(0) -- as Blizzard does before reusing a line: no stale height
+                end
                 swap(line, "")
             else
                 swap(line, nil)

@@ -1,9 +1,10 @@
 <Bindings>
-	<!-- The client loads this file by itself; it is not listed in the TOC. Labels are
-	     BINDING_HEADER_MONKEDO and BINDING_NAME_MONKEDO_PICK, set in Core.lua.
-	     category="ADDONS" files the key under Keybindings > AddOns (the game looks the name
-	     up as a global string, ADDONS = "AddOns"). -->
-	<Binding name="MONKEDO_PICK" header="MONKEDO" category="ADDONS">
+	<!-- The client loads this file by itself; it is not listed in the TOC. The label is
+	     BINDING_NAME_MONKEDO_PICK, set in Core.lua. category="ADDONS" files the key under
+	     Keybindings > AddOns (the game looks the name up as a global string, ADDONS = "AddOns").
+	     No header: the current keybinding screen draws every header as an empty spacer row, so
+	     the addon's name is in the label instead. -->
+	<Binding name="MONKEDO_PICK" category="ADDONS">
 		MonkeDo_Pick()
 	</Binding>
 </Bindings>

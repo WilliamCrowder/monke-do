@@ -20,9 +20,10 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
    updates after looting one more. The lore sits under
    "Description". There is no "Monke get:" line (the map's own rewards panel is below) and none
    of Blizzard's own objective lines.
-   - No empty gap between the task list and "Description" (or the group size line) once
-     Blizzard's objective lines are emptied. Compare with the toggle on: Blizzard's lines come
-     back with "(Complete)" where due, and the spacing matches.
+   - No big empty gap between the task list and "Description" (or the group size line) once
+     Blizzard's objective lines are emptied. Blizzard's own offsets remain, so expect roughly
+     10-16 px more than with no list at all; a gap of several text lines is a bug. Compare with
+     the toggle on: Blizzard's lines come back with "(Complete)" where due.
    - A finished objective shows grey. The header, the grey lines, the grey "Long story?" line
      and the red group warning are all easy to read on the parchment page, and again after
      turning on Quest Text Contrast (Options > Accessibility): Monke Do reads the page's own
@@ -78,10 +79,15 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 
 ## Now line and Monke pick
 
-17. Log in with a quest super-tracked (click a quest in the tracker). A dark line sits just above
-    the objective tracker, left edges lined up, as wide as the tracker, not covering the tracker,
-    the minimap, the buffs or the zone text. Its text is a size larger than the tracker's lines.
-    With the tracker empty or collapsed it still sits somewhere sensible.
+17. Log in with a quest super-tracked (click the round map-pin button next to the quest in the
+    tracker, or right-click the quest > Focus; a left-click on the title opens the map instead).
+    A dark one-line strip sits just above the objective tracker, left edges lined up, as wide as
+    the tracker, not covering the tracker, the minimap, the buffs or the zone text. Its text is a
+    size larger than the tracker's lines. Check it again with the durability figure showing
+    (damaged gear), during a boss fight (boss frames), and on a quest whose route shows a "Way:"
+    line in the tooltip: the strip must not slide under those frames, and a long step is cut on
+    one line (hover shows it whole). With the tracker empty or collapsed it still sits somewhere
+    sensible.
 18. Drag the line with the left mouse button: it follows the mouse, cannot leave the screen, and
     letting go does not also pick a quest. `/dump MonkeDoDB.nowPoint` then shows `point`,
     `relativePoint`, `x` and `y` (nil means the client left the frame anchored to something other
@@ -91,20 +97,25 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
     On another continent or inside an instance there is no distance, and no error.
 20. Kill or loot for the objective on the line: the count, e.g. `(4/10)`, updates within a moment,
     also mid-fight. After the last objective the line switches to the turn-in line.
-21. Super-track a quest whose next step is in another zone or across water: a second, smaller line
-    reads "Way: ..." (plain: "Next: ..."). The middle dot before the distance and the dash in the
-    chat line of item 26 show as characters, not boxes.
-22. Options > Keybindings > AddOns lists "Monke pick: which quest now?" under Monke Do. Bind a key and
-    press it: Blizzard's arrow and map pin point at the picked quest (one ready to hand in first,
-    else the nearest), with a short click. Press again: the next quest; after the last it wraps.
-    `/monke pick` and a left-click on the line do the same, also in combat.
+21. Super-track a quest whose next step is in another zone or across water: the tooltip has a
+    "Way: ..." line (plain: "Next: ..."); the strip stays one line. The middle dot before the
+    distance and the dash in the chat line of item 26 show as characters, not boxes.
+22. Options > Keybindings > AddOns lists "Monke Do: which quest now?" (there is no separate
+    "Monke Do" heading: the game draws headings there as blank rows). Bind a key and press it:
+    Blizzard's arrow and map pin point at the picked quest (one ready to hand in first, else the
+    nearest), with a short click. Press again: the next quest; after the last it wraps.
+    `/monke pick` and a left-click on the line do the same, also in combat. A picked quest you
+    are not watching stays off Blizzard's tracker (Monke Do does not add watches, to keep the
+    tracker untainted); the strip still shows it.
 23. With nothing super-tracked the line reads "Now: nothing. Click, Monke pick." With an empty quest
     log, a pick says "No quest. Monke go find quest giver." for a few seconds.
-24. Right-click the line out of combat: the map opens on the quest's details. In combat: nothing
-    opens and the line says "Monke busy bonking. Map after fight." for a few seconds. Then fight
-    again and use a quest item button in the tracker and an action button: no "action blocked" and
-    no "Interface action failed because of an AddOn".
-25. Hover the line: the tooltip shows the quest title, then the click, right-click and drag lines.
+24. Right-click the line: nothing happens (by design: opening Blizzard's map from addon code taints
+    the map and the tracker, and Blizzard's next map refresh in combat gets blocked). Press M: the
+    map shows the picked quest. Then, with the map still open, fight a quest mob, loot it, and use
+    a quest item button in the tracker and an action button: no "action blocked" and no
+    "Interface action failed because of an AddOn".
+25. Hover the line: the tooltip shows the quest title, the whole step with its distance, the
+    "Way:" route when there is one, then the click and drag lines.
 26. `/monke now off` hides the line; a pick then prints one chat line ("Monke pick: <quest> — <next
     step> · <distance>"). `/monke now on` and the "Now line" checkbox in the settings panel bring
     it back. `/monke voice plain` changes its words at once.

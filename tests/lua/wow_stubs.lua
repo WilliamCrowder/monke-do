@@ -108,7 +108,12 @@ local function newFontString(text)
     function fs:SetFont() end
     function fs:SetJustifyH() end
     function fs:SetJustifyV() end
-    function fs:SetWordWrap() end
+    function fs:SetWordWrap(wrap)
+        self.wordWrap = wrap
+    end
+    function fs:SetMaxLines(lines)
+        self.maxLines = lines
+    end
     function fs:SetShadowOffset() end
     return fs
 end
@@ -341,7 +346,7 @@ local OWNED = {
     -- Now line and Monke pick
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
     "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails",
-    "MonkeDo_Pick", "BINDING_HEADER_MONKEDO", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame",
+    "MonkeDo_Pick", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame",
 }
 
 function WowStubs.reset()

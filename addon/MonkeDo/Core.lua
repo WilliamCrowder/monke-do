@@ -267,8 +267,7 @@ function MonkeDo_OnAddonCompartmentClick()
 end
 
 -- Named in Bindings.xml (binding MONKEDO_PICK). The labels show in Keybindings, AddOns.
-BINDING_HEADER_MONKEDO = "Monke Do"
-BINDING_NAME_MONKEDO_PICK = "Monke pick: which quest now?"
+BINDING_NAME_MONKEDO_PICK = "Monke Do: which quest now?"
 
 function MonkeDo_Pick()
     if ns.Pick then
