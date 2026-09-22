@@ -27,8 +27,9 @@ static Lua table.
 
 ## Missing or wrong quest?
 
-Forever's new quests only reach the database once public sites list them. If a quest shows
-"Lore not yet translated", or a task is wrong,
+Forever's new quests only reach the database once public sites list them. Until then a quest
+still gets a task list, and its story slot shows the game's own one-line summary with "Long
+story? Poke Wrinkle." under it. If you see that, or a task is wrong,
 [report the quest ID](../../issues/new?template=missing-quest.yml).
 
 ## Credits and licence

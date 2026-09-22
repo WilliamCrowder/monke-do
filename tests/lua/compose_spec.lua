@@ -472,3 +472,39 @@ describe("Compose", function()
         end)
     end)
 end)
+
+describe("Compose.Palette", function()
+    local Compose
+
+    before_each(function()
+        WowStubs.reset()
+        Compose = WowStubs.load().Compose
+    end)
+
+    it("takes the header colour as it is and matches the greys and red to the page", function()
+        local parchment = Compose.Palette({ 0.18, 0.12, 0.06 }, { 0, 0, 0 })
+        assert.are.same({ header = "|cff000000", done = "|cff4d4d4d", hint = "|cff4d4d4d", group = "|cffb01010" },
+            parchment)
+        local stone = Compose.Palette({ 1, 1, 1 }, { 0.93, 0.82, 0 })
+        assert.are.same({ header = "|cffedd100", done = "|cff9d9d9d", hint = "|cff9d9d9d", group = "|cffff4040" }, stone)
+    end)
+
+    it("falls back to the defaults for colours it cannot read", function()
+        local palette = Compose.Palette(nil, { "x" })
+        assert.are.equal(Compose.HEADER_COLOR, palette.header)
+        assert.are.equal(Compose.DONE_COLOR, palette.done)
+        assert.are.equal(Compose.GROUP_COLOR, palette.group)
+        assert.are.equal("|cffffffff", Compose.Palette(nil, { 2, 1.5, 1 }).header) -- clamped
+    end)
+
+    it("colours every added line from the palette when one is given", function()
+        local palette = Compose.Palette({ 1, 1, 1 }, { 0.93, 0.82, 0 })
+        local live = { { text = "10/10 Red Silk Bandana", type = "item", finished = true, numFulfilled = 10, numRequired = 10 } }
+        local s = Compose.Build({ objectives = live, voice = "monke", showProgress = true, groupSize = 3, palette = palette })
+        assert.is_true(Compose.LogObjectivesText(s):find("^|cffedd100Monke do:|r") ~= nil)
+        assert.is_true(Compose.ObjectivesText(s):find("|cff9d9d9d\226\128\162 Grab 10 Red Silk Bandana (10/10)|r", 1, true) ~= nil)
+        local description = Compose.DescriptionText(s, "The long story of the bandanas. It goes on.", "Bring 10 bandanas.")
+        assert.is_true(description:find("^|cffff4040Bring 2 friends") ~= nil)
+        assert.is_true(description:find("|cff9d9d9d", 1, true) ~= nil) -- the toggle hint
+    end)
+end)

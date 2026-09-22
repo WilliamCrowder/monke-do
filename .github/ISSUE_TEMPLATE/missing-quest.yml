@@ -1,5 +1,5 @@
 name: Missing or wrong quest
-description: A quest shows "Lore not yet translated", or its Monke Do text is wrong.
+description: A quest has no Monke Do summary yet ("Long story? Poke Wrinkle." under a short sentence), or its text is wrong.
 title: "Quest <ID>: "
 labels: ["quest-data"]
 body:
@@ -27,7 +27,7 @@ body:
     attributes:
       label: What is wrong?
       options:
-        - No lore ("Lore not yet translated")
+        - No Monke Do summary yet (only a short sentence and "Long story? Poke Wrinkle.")
         - Wrong count or wrong target in a task
         - Lore says something the quest does not
         - Tone problem

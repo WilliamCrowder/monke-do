@@ -15,15 +15,18 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
    - Toggle to the original while the map quest details are open, then open a quest giver: the
      header says "Quest Objectives", never "Monke do:".
 3. Accept the quest, open the map quest details (and the quest log popup, if the client has
-   one): the task list comes first, starting with a gold "Monke do:" line, with progress such as
-   `(3/10)` on the item bullet that updates after looting one more. The lore sits under
+   one): the task list comes first, starting with a "Monke do:" line in the same colour as
+   Blizzard's "Description" header, with progress such as `(3/10)` on the item bullet that
+   updates after looting one more. The lore sits under
    "Description". There is no "Monke get:" line (the map's own rewards panel is below) and none
    of Blizzard's own objective lines.
    - No empty gap between the task list and "Description" (or the group size line) once
      Blizzard's objective lines are emptied. Compare with the toggle on: Blizzard's lines come
      back with "(Complete)" where due, and the spacing matches.
-   - A finished objective shows grey. The gold header and the grey lines are readable on the
-     parchment background, and with Quest Text Contrast (Accessibility settings) turned on.
+   - A finished objective shows grey. The header, the grey lines, the grey "Long story?" line
+     and the red group warning are all easy to read on the parchment page, and again after
+     turning on Quest Text Contrast (Options > Accessibility): Monke Do reads the page's own
+     colours after each redraw, so it should switch with Blizzard's text.
    - A quest whose route goes through a boat, tram or portal (Blizzard shows a waypoint line at
      the top of its list) shows a "Way: ..." bullet first ("Next: ..." in plain voice) with the
      same place as Blizzard's line when toggled.

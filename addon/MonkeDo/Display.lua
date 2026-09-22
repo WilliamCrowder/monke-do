@@ -117,6 +117,23 @@ local function waypointText(questID)
 end
 
 -- Everything Compose needs for one quest.
+local function textColour(fontString)
+    if fontString and fontString.GetTextColor then
+        local r, g, b = fontString:GetTextColor()
+        if type(r) == "number" and type(g) == "number" and type(b) == "number" then
+            return { r, g, b }
+        end
+    end
+    return nil
+end
+
+-- Blizzard colours the quest frame's body text and headers for the page material and the
+-- Quest Text Contrast option before it lays the page out, so by the time our hook runs these
+-- are the colours of the page on screen.
+local function framePalette()
+    return Compose.Palette(textColour(QuestInfoObjectivesText), textColour(QuestInfoDescriptionHeader))
+end
+
 function Display.BuildSections(questID, fromLog)
     local objectives
     if C_QuestLog and C_QuestLog.GetQuestObjectives then
@@ -124,6 +141,7 @@ function Display.BuildSections(questID, fromLog)
     end
     local size, tagged = groupInfo(questID, fromLog)
     return Compose.Build({
+        palette = framePalette(),
         record = Core.GetRecord(questID),
         objectives = objectives,
         voice = Core.Get("voice"),

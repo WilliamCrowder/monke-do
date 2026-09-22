@@ -168,7 +168,7 @@ describe("Rules", function()
         it("every key exists in both voices", function()
             for _, key in ipairs({ "monster", "monster_one", "item", "item_one", "object", "object_one", "event",
                 "reputation", "reputation_unknown", "turnin", "turnin_other", "turnin_unknown", "group", "group_one", "group_tag",
-                "rewards", "rewards_choice", "no_lore", "progress_todo", "progress_ready", "complete",
+                "rewards", "rewards_choice", "progress_todo", "progress_ready", "complete",
                 "toggle_to_original", "toggle_to_monke", "toggle_tip_original", "toggle_tip_monke" }) do
                 assert.is_true(Voice.Get(key, "monke") ~= "", key)
                 assert.is_true(Voice.Get(key, "plain") ~= "", key)

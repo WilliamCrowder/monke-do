@@ -603,6 +603,9 @@ function WowStubs.reset()
     QuestInfoDescriptionHeader = newFontString("Description")
     QuestInfoObjectivesHeader:Hide()
     QuestInfoDescriptionHeader:Hide()
+    -- The quest frame on parchment, as QuestInfo_Display colours it (GetMaterialTextColors):
+    -- dark brown body text and black headers. WowStubs.stone() switches to the stone page.
+    WowStubs.parchment()
     QuestInfoObjectivesFrame = newFrame("Frame", "QuestInfoObjectivesFrame")
     QuestInfoObjectivesFrame.Objectives = {}
     WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL = "Optional: %s" -- the real client has its own wording
@@ -842,6 +845,25 @@ function WowStubs.declaredGlobals()
         end
     end
     return declared
+end
+
+-- Page colours QuestInfo_Display gives the quest frame's text (GetMaterialTextColors):
+-- parchment is the default page; stone is the one Quest Text Contrast switches to.
+local function paint(body, header)
+    for _, fs in ipairs({ QuestInfoDescriptionText, QuestInfoObjectivesText, QuestInfoRewardText, QuestProgressText }) do
+        fs:SetTextColor(body[1], body[2], body[3])
+    end
+    for _, fs in ipairs({ QuestInfoObjectivesHeader, QuestInfoDescriptionHeader }) do
+        fs:SetTextColor(header[1], header[2], header[3])
+    end
+end
+
+function WowStubs.parchment()
+    paint({ 0.18, 0.12, 0.06 }, { 0, 0, 0 })
+end
+
+function WowStubs.stone()
+    paint({ 1, 1, 1 }, { 0.93, 0.82, 0 })
 end
 
 WowStubs.realPrint = realPrint

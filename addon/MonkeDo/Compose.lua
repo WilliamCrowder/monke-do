@@ -16,6 +16,44 @@ Compose.GROUP_COLOR = "|cffff2020"
 Compose.HEADER_COLOR = "|cffffd100" -- NORMAL_FONT_COLOR, Blizzard's gold: the log view's list header
 Compose.DONE_COLOR = "|cff808080"   -- grey: objectives the game reports finished
 Compose.HINT_COLOR = "|cff808080"   -- grey: the "long story? use the toggle" line
+
+local function hex(r, g, b)
+    local function byte(v)
+        v = tonumber(v) or 0
+        if v < 0 then
+            v = 0
+        elseif v > 1 then
+            v = 1
+        end
+        return math.floor(v * 255 + 0.5)
+    end
+    return ("|cff%02x%02x%02x"):format(byte(r), byte(g), byte(b))
+end
+
+-- The colours above are defaults. On every redraw Blizzard recolours the quest frame's text
+-- for the page it sits on (dark on parchment, light on stone and with Quest Text Contrast), so
+-- gold or mid-grey text we add can end up nearly invisible. Display passes the frame's own
+-- body and header colours ({r, g, b} each) and gets colours that stay readable on that page:
+-- the header exactly like Blizzard's headers, and a grey and a red matched to light or dark text.
+function Compose.Palette(body, header)
+    local palette = { header = Compose.HEADER_COLOR, done = Compose.DONE_COLOR,
+        hint = Compose.HINT_COLOR, group = Compose.GROUP_COLOR }
+    if type(header) == "table" and type(header[1]) == "number" then
+        palette.header = hex(header[1], header[2], header[3])
+    end
+    if type(body) == "table" and type(body[1]) == "number" then
+        local light = 0.299 * body[1] + 0.587 * (body[2] or 0) + 0.114 * (body[3] or 0) > 0.5
+        palette.done = light and "|cff9d9d9d" or "|cff4d4d4d"
+        palette.hint = palette.done
+        palette.group = light and "|cffff4040" or "|cffb01010"
+    end
+    return palette
+end
+
+local function colour(sections, key)
+    local palette = sections and sections.palette
+    return (type(palette) == "table" and palette[key]) or Compose[key:upper() .. "_COLOR"]
+end
 Compose.OPENING_CHARS = 160         -- the most of a description shown in place of missing lore
 Compose.ELLIPSIS = "\226\128\166"   -- U+2026
 
@@ -326,7 +364,7 @@ function Compose.Build(input)
     local voice = Voice.IsVoice(input.voice) and input.voice or Voice.DEFAULT
     local record = Compose.UsableRecord(input.record)
     local live = Rules.Visible(input.objectives)
-    local out = { voice = voice, tasks = {}, finished = {} }
+    local out = { voice = voice, tasks = {}, finished = {}, palette = input.palette }
 
     out.group = groupLine(input, record, voice)
 
@@ -482,7 +520,7 @@ end
 -- objectives sentence, or for a talk quest that has none, the opening of the description.
 -- When that leaves some of Blizzard's story unseen, a grey line points at the toggle.
 -- The whole long description is exactly what this addon is for, so it never comes back here.
-function Compose.LoreStandIn(voice, description, sentence)
+function Compose.LoreStandIn(voice, description, sentence, palette)
     local full = type(description) == "string" and squash(description) or ""
     local text = type(sentence) == "string" and trim(sentence) or ""
     if text == "" then
@@ -493,7 +531,7 @@ function Compose.LoreStandIn(voice, description, sentence)
     end
     if full ~= "" and squash(text) ~= full then
         local hint = Voice.Format("toggle_hint", voice, { button = Voice.Get("toggle_to_original", voice) })
-        text = text .. "\n" .. Compose.HINT_COLOR .. hint .. "|r"
+        text = text .. "\n" .. colour({ palette = palette }, "hint") .. hint .. "|r"
     end
     return text
 end
@@ -504,12 +542,12 @@ end
 function Compose.DescriptionText(sections, originalText, objectivesText)
     local parts = {}
     if sections.group then
-        parts[#parts + 1] = Compose.GROUP_COLOR .. sections.group .. "|r"
+        parts[#parts + 1] = colour(sections, "group") .. sections.group .. "|r"
     end
     if sections.lore then
         parts[#parts + 1] = sections.lore
     elseif sections.loreMissing then
-        parts[#parts + 1] = Compose.LoreStandIn(sections.voice, originalText, objectivesText)
+        parts[#parts + 1] = Compose.LoreStandIn(sections.voice, originalText, objectivesText, sections.palette)
     end
     return table.concat(parts, "\n\n")
 end
@@ -517,11 +555,12 @@ end
 -- One bullet per task, tasks[1..last] (all of them by default), finished objectives grey.
 local function bullets(sections, last)
     local finished = sections.finished or {}
+    local done = colour(sections, "done")
     local lines = {}
     for i = 1, last or #sections.tasks do
         local line = Voice.BULLET .. sections.tasks[i]
         if finished[i] then
-            line = Compose.DONE_COLOR .. line .. "|r"
+            line = done .. line .. "|r"
         end
         lines[i] = line
     end
@@ -542,7 +581,7 @@ end
 -- one task list: a header line, the game's "which way" line when it has one, the bullets. No
 -- rewards line: both views draw their own rewards panel.
 function Compose.LogObjectivesText(sections)
-    local lines = { Compose.HEADER_COLOR .. Voice.Get("tasks_header", sections.voice) .. "|r" }
+    local lines = { colour(sections, "header") .. Voice.Get("tasks_header", sections.voice) .. "|r" }
     if sections.waypoint then
         lines[#lines + 1] = Voice.BULLET .. sections.waypoint
     end

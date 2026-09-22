@@ -4,11 +4,11 @@
 describe("Display", function()
     local ns
     local BULLET = "\226\128\162 "
-    local HEADER_MONKE = "|cffffd100Monke do:|r"
-    local HEADER_PLAIN = "|cffffd100To do:|r"
-    local GREY = "|cff808080"
-    local HINT_MONKE = "|cff808080Long story? Poke Wrinkle.|r"
-    local HINT_PLAIN = "|cff808080Full text: press Original.|r"
+    local HEADER_MONKE = "|cff000000Monke do:|r" -- Blizzard's header colour on parchment
+    local HEADER_PLAIN = "|cff000000To do:|r"
+    local GREY = "|cff4d4d4d" -- the finished-line grey that reads on parchment
+    local HINT_MONKE = "|cff4d4d4dLong story? Poke Wrinkle.|r"
+    local HINT_PLAIN = "|cff4d4d4dFull text: press Original.|r"
 
     local RECORD_214 = {
         l = "Bad men wear red hankies. Scout lady want them. Take hankies.",
@@ -182,7 +182,7 @@ describe("Display", function()
         assert.is_nil(QuestInfoDescriptionText:GetText())
         WowStubs.quest.groupSize = 3
         WowStubs.showQuest("log")
-        assert.are.equal("|cffff2020Bring 2 friends. Big danger.|r", QuestInfoDescriptionText:GetText())
+        assert.are.equal("|cffb01010Bring 2 friends. Big danger.|r", QuestInfoDescriptionText:GetText())
     end)
 
     it("relabels the Quest Objectives header on the quest giver page, and the toggle puts it back", function()
@@ -248,13 +248,13 @@ describe("Display", function()
     it("prepends the group warning from the quest giver API", function()
         WowStubs.quest.groupSize = 3
         WowStubs.showQuest("detail")
-        assert.are.equal("|cffff2020Bring 2 friends. Big danger.|r\n\n" .. RECORD_214.l, QuestInfoDescriptionText:GetText())
+        assert.are.equal("|cffb01010Bring 2 friends. Big danger.|r\n\n" .. RECORD_214.l, QuestInfoDescriptionText:GetText())
     end)
 
     it("treats elite and dungeon tags as group quests", function()
         WowStubs.quest.tag = { tagID = 81, isElite = false }
         WowStubs.showQuest("detail")
-        assert.are.equal("|cffff2020Bring friends. Big danger.|r\n\n" .. RECORD_214.l, QuestInfoDescriptionText:GetText())
+        assert.are.equal("|cffb01010Bring friends. Big danger.|r\n\n" .. RECORD_214.l, QuestInfoDescriptionText:GetText())
     end)
 
     it("rewrites the progress page and restores it", function()
@@ -616,5 +616,36 @@ describe("globals", function()
         end
         table.sort(undeclared)
         assert.are.same({}, undeclared)
+    end)
+end)
+
+describe("Display colours", function()
+    local BULLET = "\226\128\162 "
+
+    before_each(function()
+        WowStubs.reset()
+        _G.MonkeDB = { [214] = { l = "Bad men wear red hankies.", t = { "Grab 10 Red Silk Bandana.", "Go back to Scout Riell." },
+            n = 1, e = "Scout Riell", v = 3 } }
+        WowStubs.load()
+        WowStubs.login()
+    end)
+
+    it("follows Blizzard's stone page (Quest Text Contrast) instead of assuming parchment", function()
+        WowStubs.stone()
+        WowStubs.quest.objectives[1] = { text = "10/10 Red Silk Bandana", type = "item", finished = true,
+            numFulfilled = 10, numRequired = 10 }
+        WowStubs.showQuest("log")
+        local text = QuestInfoObjectivesText:GetText()
+        assert.is_true(text:find("^|cffedd100Monke do:|r") ~= nil, text)
+        assert.is_true(text:find("|cff9d9d9d" .. BULLET .. "Grab 10 Red Silk Bandana (10/10)|r", 1, true) ~= nil, text)
+    end)
+
+    it("uses a red that reads on each page for the group warning", function()
+        WowStubs.quest.groupSize = 3
+        WowStubs.showQuest("detail")
+        assert.is_true(QuestInfoDescriptionText:GetText():find("^|cffb01010Bring 2 friends") ~= nil)
+        WowStubs.stone()
+        WowStubs.showQuest("detail")
+        assert.is_true(QuestInfoDescriptionText:GetText():find("^|cffff4040Bring 2 friends") ~= nil)
     end)
 end)
