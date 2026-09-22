@@ -20,4 +20,6 @@ ignore:
   - pyproject.toml
   - uv.lock
   - README.md
+  - CLAUDE.md
+  - .gitattributes
   - addon/MonkeDo/Media/README.md
