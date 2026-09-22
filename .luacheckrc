@@ -11,6 +11,9 @@ exclude_files = {
 globals = {
     "MonkeDoDB",
     "MonkeDo_OnAddonCompartmentClick",
+    "MonkeDo_Pick",                 -- called by the key binding in Bindings.xml
+    "BINDING_HEADER_MONKEDO",
+    "BINDING_NAME_MONKEDO_PICK",
     "SLASH_MONKEDO1",
     "SLASH_MONKEDO2",
     "SlashCmdList",
@@ -28,6 +31,13 @@ read_globals = {
     "QuestFrame", "QuestFrameProgressPanel", "QuestInfoFrame", "QuestInfo_Display",
     "QuestInfoDescriptionText", "QuestInfoObjectivesText", "QuestInfoRewardText", "QuestProgressText",
     "QuestMapFrame",
+    -- quest log view
+    "QuestInfoObjectivesFrame", "QuestInfoObjectivesHeader", "QuestInfoDescriptionHeader",
+    "GetObjectiveText", "GetQuestLogQuestText", "GetNumQuestLeaderBoards", "GetQuestLogLeaderBoard",
+    "WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL",
+    -- Now line and Monke pick
+    "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
+    "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails",
 }
 
 -- The stubs and specs build a fake client out of globals on purpose.

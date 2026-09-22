@@ -26,3 +26,5 @@ Compose.lua
 Core.lua
 Display.lua
 Tracker.lua
+Pick.lua
+Now.lua

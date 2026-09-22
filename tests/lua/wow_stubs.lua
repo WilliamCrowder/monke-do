@@ -65,6 +65,51 @@ local function newFontString(text)
         end
         return height
     end
+    function fs:GetStringWidth()
+        local widest = 0
+        for line in ((self.text or "") .. "\n"):gmatch("(.-)\n") do
+            widest = math.max(widest, 6 * #line)
+        end
+        return widest
+    end
+    function fs:SetTextColor(r, g, b, a)
+        self.color = { r, g, b, a }
+    end
+    function fs:GetTextColor()
+        return unpack(self.color or { 1, 1, 1, 1 })
+    end
+    function fs:SetPoint(...)
+        self.point = { ... }
+    end
+    function fs:ClearAllPoints()
+        self.point = nil
+    end
+    function fs:SetWidth(width)
+        self.width = width
+    end
+    function fs:GetWidth()
+        return self.width or 0
+    end
+    function fs:SetHeight(height)
+        self.height = height
+    end
+    function fs:GetHeight()
+        return self.height or self:GetStringHeight()
+    end
+    function fs:SetAlpha(alpha)
+        self.alpha = alpha
+    end
+    function fs:GetAlpha()
+        return self.alpha or 1
+    end
+    function fs:SetFontObject(font)
+        self.font = font
+    end
+    function fs:SetFont() end
+    function fs:SetJustifyH() end
+    function fs:SetJustifyV() end
+    function fs:SetWordWrap() end
+    function fs:SetShadowOffset() end
     return fs
 end
 WowStubs.newFontString = newFontString
@@ -123,13 +168,131 @@ local function newFrame(frameType, name, parent, template)
         local texture = {}
         function texture:SetSize() end
         function texture:SetPoint() end
+        function texture:SetAllPoints() end
+        function texture:SetColorTexture(r, g, b, a)
+            self.color = { r, g, b, a }
+        end
         function texture:SetTexture(path)
             self.path = path
         end
+        function texture:SetAlpha(alpha)
+            self.alpha = alpha
+        end
+        function texture:Show() end
+        function texture:Hide() end
         return texture
+    end
+    function frame:CreateFontString()
+        local fs = newFontString(nil)
+        fs.parent = self
+        return fs
     end
     function frame:UpdateScrollChildRect()
         self.scrollUpdates = (self.scrollUpdates or 0) + 1
+    end
+    -- Geometry, mouse and movement: recorded, never simulated.
+    function frame:ClearAllPoints()
+        self.point = nil
+    end
+    function frame:GetPoint()
+        if self.point then
+            return unpack(self.point)
+        end
+    end
+    function frame:SetWidth(width)
+        self.width = width
+    end
+    function frame:SetHeight(height)
+        self.height = height
+    end
+    function frame:GetWidth()
+        return self.width or 0
+    end
+    function frame:GetHeight()
+        return self.height or 0
+    end
+    function frame:SetAlpha(alpha)
+        self.alpha = alpha
+    end
+    function frame:GetAlpha()
+        return self.alpha or 1
+    end
+    function frame:SetShown(show)
+        if show then
+            self:Show()
+        else
+            self:Hide()
+        end
+    end
+    function frame:SetMovable(movable)
+        self.movable = movable
+    end
+    function frame:IsMovable()
+        return self.movable or false
+    end
+    function frame:EnableMouse(enable)
+        self.mouse = enable
+    end
+    function frame:RegisterForDrag(...)
+        self.dragButtons = { ... }
+    end
+    function frame:RegisterForClicks(...)
+        self.clickButtons = { ... }
+    end
+    function frame:SetClampedToScreen(clamped)
+        self.clamped = clamped
+    end
+    function frame:StartMoving()
+        self.moving = true
+    end
+    function frame:StopMovingOrSizing()
+        self.moving = false
+    end
+    function frame:SetUserPlaced() end
+    function frame:SetFrameStrata(strata)
+        self.strata = strata
+    end
+    function frame:SetToplevel() end
+    function frame:IsMouseOver()
+        return false
+    end
+    function frame:UnregisterEvent(event)
+        self.events[event] = nil
+    end
+    function frame:UnregisterAllEvents()
+        self.events = {}
+    end
+    function frame:SetBackdrop(backdrop)
+        self.backdrop = backdrop
+    end
+    function frame:SetBackdropColor() end
+    function frame:SetBackdropBorderColor() end
+    function frame:CreateAnimationGroup()
+        local group = { animations = {}, playing = false }
+        function group:CreateAnimation(kind)
+            local anim = { kind = kind }
+            for _, setter in ipairs({ "SetFromAlpha", "SetToAlpha", "SetDuration", "SetOrder", "SetStartDelay",
+                "SetSmoothing" }) do
+                anim[setter] = function() end
+            end
+            table.insert(self.animations, anim)
+            return anim
+        end
+        function group:SetLooping() end
+        function group:SetScript(kind, fn)
+            self[kind] = fn
+        end
+        function group:Play()
+            self.playing = true
+            self.plays = (self.plays or 0) + 1
+        end
+        function group:Stop()
+            self.playing = false
+        end
+        function group:IsPlaying()
+            return self.playing
+        end
+        return group
     end
     table.insert(WowStubs.frames, frame)
     return frame
@@ -140,6 +303,7 @@ end
 local function defaultQuest()
     return {
         id = 214,
+        title = "Red Silk Bandanas",
         description = "The Defias wear red bandanas. Bring me 10 of them, $n.",
         objectivesText = "Scout Riell at the Sentinel Hill Tower wants you to bring her 10 Red Silk Bandanas.",
         progressText = "Do you have the bandanas?",
@@ -170,6 +334,14 @@ local OWNED = {
     "QuestFrame", "QuestFrameProgressPanel", "QuestInfoFrame", "QuestInfo_Display",
     "QuestInfoDescriptionText", "QuestInfoObjectivesText", "QuestInfoRewardText", "QuestProgressText",
     "QuestMapFrame", "QuestDetailScrollFrame", "QuestObjectiveTracker", "CampaignQuestObjectiveTracker",
+    -- quest log view pieces
+    "QuestInfoObjectivesFrame", "QuestInfoObjectivesHeader", "QuestInfoDescriptionHeader",
+    "GetObjectiveText", "GetQuestLogQuestText", "GetNumQuestLeaderBoards", "GetQuestLogLeaderBoard",
+    "WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL",
+    -- Now line and Monke pick
+    "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
+    "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails",
+    "MonkeDo_Pick", "BINDING_HEADER_MONKEDO", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame",
 }
 
 function WowStubs.reset()
@@ -181,6 +353,13 @@ function WowStubs.reset()
     WowStubs.loadedAddons = {}
     WowStubs.openedCategory = nil
     WowStubs.quest = defaultQuest()
+    WowStubs.log = {}           -- quest log entries; see WowStubs.addLogQuest
+    WowStubs.superTracked = 0   -- C_SuperTrack.GetSuperTrackedQuestID()
+    WowStubs.now = 1000         -- GetTime() and the timer clock, in seconds; see WowStubs.advance
+    WowStubs.timers = {}
+    WowStubs.inCombat = false
+    WowStubs.sounds = {}
+    WowStubs.openedQuest = nil  -- last QuestMapFrame_OpenToQuestDetails(questID)
 
     print = function(...)
         local parts = {}
@@ -219,15 +398,36 @@ function WowStubs.reset()
         end,
     }
 
+    -- A quest is described by a table: WowStubs.quest (the one open in the quest frame) or an
+    -- entry of WowStubs.log. Fields read below: objectives, title, distanceSq, onContinent,
+    -- waypoint, ready, complete, failed.
+    local function entryFor(questID)
+        for _, entry in ipairs(WowStubs.log) do
+            if entry.questID == questID and not entry.isHeader then
+                return entry
+            end
+        end
+        if questID == WowStubs.quest.id then
+            return WowStubs.quest
+        end
+        return nil
+    end
+    WowStubs.entryFor = entryFor
+
     C_QuestLog = {
         GetQuestObjectives = function(questID)
-            return questID == WowStubs.quest.id and WowStubs.quest.objectives or {}
+            local entry = entryFor(questID)
+            return entry and entry.objectives or {}
         end,
         GetSelectedQuest = function()
             return WowStubs.quest.id
         end,
         IsOnQuest = function(questID)
-            return questID == WowStubs.quest.id and WowStubs.quest.onQuest
+            local entry = entryFor(questID)
+            if entry == WowStubs.quest then
+                return WowStubs.quest.onQuest
+            end
+            return entry ~= nil
         end,
         GetSuggestedGroupSize = function()
             return WowStubs.quest.groupSize
@@ -235,7 +435,119 @@ function WowStubs.reset()
         GetQuestTagInfo = function()
             return WowStubs.quest.tag
         end,
+        GetNumQuestLogEntries = function()
+            local quests = 0
+            for _, entry in ipairs(WowStubs.log) do
+                if not entry.isHeader then
+                    quests = quests + 1
+                end
+            end
+            return #WowStubs.log, quests
+        end,
+        GetInfo = function(index)
+            local e = WowStubs.log[index]
+            if not e then
+                return nil
+            end
+            return {
+                title = e.title, questID = e.questID or 0, questLogIndex = index,
+                isHeader = e.isHeader or false, isHidden = e.isHidden or false, isTask = e.isTask or false,
+                isBounty = e.isBounty or false, isInternalOnly = e.isInternalOnly or false,
+                isOnMap = e.isOnMap ~= false, frequency = e.frequency or 0,
+            }
+        end,
+        GetLogIndexForQuestID = function(questID)
+            for index, entry in ipairs(WowStubs.log) do
+                if entry.questID == questID and not entry.isHeader then
+                    return index
+                end
+            end
+            return nil
+        end,
+        GetTitleForQuestID = function(questID)
+            local entry = entryFor(questID)
+            return entry and entry.title or nil
+        end,
+        -- MayReturnNothing in Blizzard's documentation: nil when the game has no position.
+        GetDistanceSqToQuest = function(questID)
+            local entry = entryFor(questID)
+            if not entry or entry.distanceSq == nil then
+                return nil
+            end
+            return entry.distanceSq, entry.onContinent ~= false
+        end,
+        GetNextWaypointText = function(questID)
+            local entry = entryFor(questID)
+            return entry and entry.waypoint or nil
+        end,
+        ReadyForTurnIn = function(questID)
+            local entry = entryFor(questID)
+            return entry and entry.ready or false
+        end,
+        IsComplete = function(questID)
+            local entry = entryFor(questID)
+            return entry and (entry.complete or entry.ready) or false
+        end,
+        IsFailed = function(questID)
+            local entry = entryFor(questID)
+            return entry and entry.failed or false
+        end,
     }
+
+    C_SuperTrack = {
+        GetSuperTrackedQuestID = function()
+            return WowStubs.superTracked or 0
+        end,
+        SetSuperTrackedQuestID = function(questID)
+            WowStubs.superTracked = questID
+            WowStubs.fire("SUPER_TRACKING_CHANGED")
+        end,
+    }
+
+    -- Timers run only when a spec calls WowStubs.advance(seconds).
+    local function schedule(delay, fn, every, iterations)
+        local handle = { cancelled = false }
+        function handle:Cancel()
+            self.cancelled = true
+        end
+        function handle:IsCancelled()
+            return self.cancelled
+        end
+        table.insert(WowStubs.timers, { at = WowStubs.now + delay, fn = fn, every = every,
+            left = iterations, handle = handle })
+        return handle
+    end
+    C_Timer = {
+        After = function(delay, fn)
+            schedule(delay, fn)
+        end,
+        NewTimer = function(delay, fn)
+            return schedule(delay, fn)
+        end,
+        NewTicker = function(every, fn, iterations)
+            return schedule(every, fn, every, iterations)
+        end,
+    }
+    GetTime = function()
+        return WowStubs.now
+    end
+    InCombatLockdown = function()
+        return WowStubs.inCombat == true
+    end
+    UIParent = newFrame("Frame", "UIParent")
+    UIParent.shown = true
+    ObjectiveTrackerFrame = newFrame("Frame", "ObjectiveTrackerFrame")
+    ObjectiveTrackerFrame.shown = true
+    PlaySound = function(kit)
+        table.insert(WowStubs.sounds, kit)
+    end
+    SOUNDKIT = { IG_QUEST_LIST_SELECT = 875, IG_MAINMENU_OPTION_CHECKBOX_ON = 856 }
+    issecretvalue = function()
+        return false
+    end
+    QuestMapFrame_OpenToQuestDetails = function(questID)
+        WowStubs.openedQuest = questID
+    end
     GetQuestID = function()
         return WowStubs.quest.id
     end
@@ -285,23 +597,144 @@ function WowStubs.reset()
     for _, fs in ipairs({ QuestInfoDescriptionText, QuestInfoObjectivesText, QuestInfoRewardText, QuestProgressText }) do
         fs:Hide()
     end
+    -- Headers get their text once, from XML, like the real ones: QuestInfo_Display never
+    -- sets it again, so a header text an addon changed stays changed until it changes it back.
+    QuestInfoObjectivesHeader = newFontString("Quest Objectives")
+    QuestInfoDescriptionHeader = newFontString("Description")
+    QuestInfoObjectivesHeader:Hide()
+    QuestInfoDescriptionHeader:Hide()
+    QuestInfoObjectivesFrame = newFrame("Frame", "QuestInfoObjectivesFrame")
+    QuestInfoObjectivesFrame.Objectives = {}
+    WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL = "Optional: %s" -- the real client has its own wording
+    GetObjectiveText = function()
+        return WowStubs.quest.objectivesText
+    end
+    GetQuestLogQuestText = function()
+        return WowStubs.quest.description, WowStubs.quest.objectivesText
+    end
+    GetNumQuestLeaderBoards = function()
+        return #(WowStubs.quest.objectives or {})
+    end
+    GetQuestLogLeaderBoard = function(index)
+        local objective = (WowStubs.quest.objectives or {})[index]
+        if objective then
+            return objective.text, objective.type, objective.finished
+        end
+    end
 
-    -- Blizzard's part: write the server's strings into the shared fontstrings.
+    -- Blizzard's part: write the server's strings into the shared fontstrings, with the pieces
+    -- and in the order of the real templates (QuestInfo.lua, QUEST_TEMPLATE_DETAIL for the
+    -- quest giver, QUEST_TEMPLATE_LOG / QUEST_TEMPLATE_MAP_DETAILS for the log and the map).
     QuestInfo_Display = function(template)
         local quest = WowStubs.quest
         QuestInfoFrame.questLog = template.questLog
-        QuestInfoDescriptionText:Hide()
-        QuestInfoObjectivesText:Hide()
-        QuestInfoRewardText:Hide()
+        for _, region in ipairs({ QuestInfoDescriptionText, QuestInfoObjectivesText, QuestInfoRewardText,
+            QuestInfoObjectivesHeader, QuestInfoDescriptionHeader }) do
+            region:Hide()
+        end
+        QuestInfoObjectivesFrame:Hide()
         if template.reward then
             QuestInfoRewardText:SetText(quest.rewardText)
             QuestInfoRewardText:Show()
-        else
+        elseif template.questLog then
+            -- objectives sentence, Blizzard's own objective list, "Description", description
+            QuestInfoObjectivesText:SetText(quest.objectivesText)
+            QuestInfoObjectivesText:Show()
+            WowStubs.showObjectiveLines(quest)
+            QuestInfoDescriptionHeader:Show()
             QuestInfoDescriptionText:SetText(quest.description)
             QuestInfoDescriptionText:Show()
+        else
+            -- description, "Quest Objectives", objectives sentence
+            QuestInfoDescriptionText:SetText(quest.description)
+            QuestInfoDescriptionText:Show()
+            QuestInfoObjectivesHeader:Show()
             QuestInfoObjectivesText:SetText(quest.objectivesText)
             QuestInfoObjectivesText:Show()
         end
+    end
+end
+
+-- QuestInfo_ShowObjectives in the log and map views: an optional waypoint line, then one
+-- fontstring per objective (spell and log objectives are left out), " (Complete)" on finished
+-- ones; unused lines are hidden and the frame is shown only when a line is.
+function WowStubs.showObjectiveLines(quest)
+    local lines = QuestInfoObjectivesFrame.Objectives
+    local count = 0
+    local function acquire()
+        count = count + 1
+        lines[count] = lines[count] or newFontString(nil)
+        return lines[count]
+    end
+    if quest.waypoint then
+        local line = acquire()
+        line:SetText(WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL:format(quest.waypoint))
+        line:Show()
+    end
+    for _, objective in ipairs(quest.objectives or {}) do
+        if objective.type ~= "spell" and objective.type ~= "log" then
+            local line = acquire()
+            local text = (objective.text and objective.text ~= "") and objective.text or objective.type
+            if objective.finished then
+                text = text .. " (Complete)"
+            end
+            line:SetText(text)
+            line:Show()
+        end
+    end
+    for i = count + 1, #lines do
+        lines[i]:Hide()
+    end
+    if count > 0 then
+        QuestInfoObjectivesFrame:Show()
+    else
+        QuestInfoObjectivesFrame:Hide()
+    end
+end
+
+-- Put a quest in the fake quest log. `entry` = { questID, title, objectives, distanceSq,
+-- onContinent, waypoint, ready, complete, failed, isHeader, isHidden, isTask, ... }.
+function WowStubs.addLogQuest(entry)
+    table.insert(WowStubs.log, entry)
+    return entry
+end
+
+-- Move the fake clock forward, running every timer that falls due, in time order.
+function WowStubs.advance(seconds)
+    local target = WowStubs.now + seconds
+    while true do
+        local due, dueIndex
+        for index, timer in ipairs(WowStubs.timers) do
+            if not timer.handle.cancelled and timer.at <= target and (not due or timer.at < due.at) then
+                due, dueIndex = timer, index
+            end
+        end
+        if not due then
+            break
+        end
+        table.remove(WowStubs.timers, dueIndex)
+        WowStubs.now = due.at
+        due.fn(due.handle)
+        if due.every and not due.handle.cancelled then
+            local left = due.left and due.left - 1
+            if left == nil or left > 0 then
+                due.at = due.at + due.every
+                due.left = left
+                table.insert(WowStubs.timers, due)
+            end
+        end
+    end
+    WowStubs.now = target
+end
+
+-- A click as the client delivers it: OnClick for buttons, OnMouseDown/OnMouseUp otherwise.
+function WowStubs.click(frame, button)
+    button = button or "LeftButton"
+    if frame.scripts.OnClick or (frame.hooks.OnClick and #frame.hooks.OnClick > 0) then
+        frame:RunScript("OnClick", button, true)
+    else
+        frame:RunScript("OnMouseDown", button)
+        frame:RunScript("OnMouseUp", button, true)
     end
 end
 
