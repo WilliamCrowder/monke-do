@@ -13,3 +13,6 @@ __pycache__/
 # libs come from .pkgmeta externals
 addon/MonkeDo/Libs/*
 !addon/MonkeDo/Libs/.gitkeep
+
+# Claude Code agent worktrees
+.claude/worktrees/
