@@ -30,13 +30,17 @@ read_globals = {
     "QuestFrame", "QuestFrameProgressPanel", "QuestInfoFrame", "QuestInfo_Display",
     "QuestInfoDescriptionText", "QuestInfoObjectivesText", "QuestInfoRewardText", "QuestProgressText",
     "QuestMapFrame",
+    -- the quest giver's description fade (read only: the addon never starts or stops it)
+    "QuestFrameDetailPanel", "QUEST_DESCRIPTION_GRADIENT_LENGTH",
     -- quest log view
     "QuestInfoObjectivesFrame", "QuestInfoObjectivesHeader", "QuestInfoDescriptionHeader",
     "GetObjectiveText", "GetQuestLogQuestText", "GetNumQuestLeaderBoards", "GetQuestLogLeaderBoard",
     "WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL",
     -- Now line and Monke pick
-    "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
+    "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent",
     "PlaySound", "SOUNDKIT", "issecretvalue",
+    -- the Now line's arrow: where the player is and faces, where the quest is
+    "C_Map", "GetPlayerFacing", "GetQuestUiMapID", "CreateVector2D",
     -- Deliberately NOT here: QuestMapFrame_* and other Blizzard map/tracker functions. Calling them
     -- from addon code taints the map and tracker; luacheck flags any use as an undefined global.
 }

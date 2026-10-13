@@ -5,6 +5,7 @@ describe("Monke pick", function()
     local ns, Pick
     local DOT = " \194\183 "
     local DASH = " \226\128\148 "
+    local GREY = "|cffb3b3b3" -- the Now line draws the distance in grey
 
     local function ids(list)
         local out = {}
@@ -190,7 +191,7 @@ describe("Monke pick", function()
             } })
             WowStubs.printed = {}
             Pick.Next()
-            assert.are.equal("Now: Grab 10 Red Silk Bandana (3/10)" .. DOT .. "120 yards", nowLine())
+            assert.are.equal("Grab 7 more Red Silk Bandana" .. GREY .. DOT .. "120 yd|r", nowLine())
             assert.are.same({}, WowStubs.printed) -- the line shows it; no chat
         end)
 
@@ -200,7 +201,7 @@ describe("Monke pick", function()
             assert.are.equal(0, WowStubs.superTracked)
             assert.are.same({}, WowStubs.sounds)
             WowStubs.advance(3)
-            assert.are.equal("Now: nothing. Click, Monke pick.", nowLine())
+            assert.are.equal("Nothing now. Click: Monke pick.", nowLine())
         end)
 
         it("says so in one chat line, in the player's voice, when the Now line is off", function()
@@ -219,12 +220,12 @@ describe("Monke pick", function()
             WowStubs.printed = {}
             assert.are.equal(214, Pick.Next())
             assert.are.same({ "|cffd2a679Monke Do|r: Monke pick: Red Silk Bandanas" .. DASH ..
-                "Grab 10 Red Silk Bandana (3/10)" .. DOT .. "120 yards" }, WowStubs.printed)
+                "Grab 7 more Red Silk Bandana" .. DOT .. "120 yd" }, WowStubs.printed)
             ns.Core.Set("voice", "plain")
             WowStubs.printed = {}
             Pick.Next()
             assert.are.same({ "|cffd2a679Monke Do|r: Picked: Red Silk Bandanas" .. DASH ..
-                "Collect 10 Red Silk Bandana (3/10)" .. DOT .. "120 yards" }, WowStubs.printed)
+                "Collect 7 more Red Silk Bandana" .. DOT .. "120 yd" }, WowStubs.printed)
         end)
 
         it("works on a client without C_SuperTrack: the Now line shows the pick", function()
@@ -236,9 +237,9 @@ describe("Monke pick", function()
             quest(30, 200)
             quest(31, 50)
             assert.are.equal(31, Pick.Next())
-            assert.are.equal("Now: Grab 5 Thing (0/5)" .. DOT .. "50 yards", nowLine())
+            assert.are.equal("Grab 5 Thing" .. GREY .. DOT .. "50 yd|r", nowLine())
             assert.are.equal(30, Pick.Next()) -- cycling goes on from the remembered pick
-            assert.are.equal("Now: Grab 5 Thing (0/5)" .. DOT .. "200 yards", nowLine())
+            assert.are.equal("Grab 5 Thing" .. GREY .. DOT .. "200 yd|r", nowLine())
         end)
 
         it("stays quiet without PlaySound or SOUNDKIT", function()

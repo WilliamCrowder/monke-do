@@ -15,6 +15,7 @@ Core.DEFAULTS = {
     groupWarning = true,
     tracker = true,
     nowLine = true,
+    goldArrow = false, -- the Now line points with the monke finger unless this is on
     minimap = { hide = false },
 }
 
@@ -126,7 +127,8 @@ function Core.PrintHelp()
     print("  /monke group on||off")
     print("  /monke tracker on||off")
     print("  /monke pick - which quest now? Again: the next one. A key for it: Keybindings, AddOns")
-    print("  /monke now on||off||reset - the Now line above the quest tracker")
+    print("  /monke now on||off||reset - the Now line at the bottom middle of the screen")
+    print("  /monke pointer finger||arrow - the monke finger or a gold arrow points the way")
     print("  /monke version")
 end
 
@@ -183,6 +185,15 @@ function Core.HandleSlash(message)
         end
         Core.Set("nowLine", parseSwitch(rest, Core.Get("nowLine")))
         Core.Print("Now line: " .. onOff(Core.Get("nowLine")))
+    elseif command == "pointer" then
+        if rest == "arrow" or rest == "gold" then
+            Core.Set("goldArrow", true)
+        elseif rest == "finger" or rest == "monke" then
+            Core.Set("goldArrow", false)
+        else
+            Core.Set("goldArrow", not Core.Get("goldArrow"))
+        end
+        Core.Print("pointer: " .. (Core.Get("goldArrow") and "gold arrow" or "monke finger"))
     elseif command == "version" then
         Core.Print(Core.VersionText())
     else
@@ -223,8 +234,10 @@ local function buildSettingsPanel()
     Settings.CreateCheckbox(category, register("tracker", "boolean", "Tracker text"),
         "Use the same short wording in the objective tracker.")
     Settings.CreateCheckbox(category, register("nowLine", "boolean", "Now line"),
-        "One next step for the tracked quest, and how far away it is, just above the quest tracker. "
-        .. "Click it for Monke pick. A key for Monke pick: Keybindings, AddOns.")
+        "One next step for the tracked quest, and how far away it is, at the bottom middle of the "
+        .. "screen. Drag it anywhere. Click it for Monke pick. A key for Monke pick: Keybindings, AddOns.")
+    Settings.CreateCheckbox(category, register("goldArrow", "boolean", "Gold arrow"),
+        "On the Now line, point the way with a gold arrow instead of the monke finger.")
 
     Settings.RegisterAddOnCategory(category)
     Core.categoryID = category:GetID()

@@ -27,4 +27,5 @@ Core.lua
 Display.lua
 Tracker.lua
 Pick.lua
+Arrow.lua
 Now.lua

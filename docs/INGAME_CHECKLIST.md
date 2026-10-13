@@ -14,6 +14,12 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
    and "Monke do:" return. `/monke lore` does the same.
    - Toggle to the original while the map quest details are open, then open a quest giver: the
      header says "Quest Objectives", never "Monke do:".
+   - With the letter-by-letter fade on (`/console instantQuestText 0`, the classic look; Blizzard
+     added it after build 1.60.1.69913): the Monke text fades in, then the task list and rewards fade
+     in and Accept lights up. After it finishes, click the toggle: all of Blizzard's text shows at
+     once, none of it cut off after the first line or two. Click again: all of the Monke text.
+     Then open a long quest in the map quest details: all of its text shows. Repeat with
+     `/console instantQuestText 1`: no fade, everything as before.
 3. Accept the quest, open the map quest details (and the quest log popup, if the client has
    one): the task list comes first, starting with a "Monke do:" line in the same colour as
    Blizzard's "Description" header, with progress such as `(3/10)` on the item bullet that
@@ -81,22 +87,23 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 
 17. Log in with a quest super-tracked (click the round map-pin button next to the quest in the
     tracker, or right-click the quest > Focus; a left-click on the title opens the map instead).
-    A dark one-line strip sits just above the objective tracker, left edges lined up, as wide as
-    the tracker, not covering the tracker, the minimap, the buffs or the zone text. Its text is a
-    size larger than the tracker's lines. Check it again with the durability figure showing
-    (damaged gear), during a boss fight (boss frames), and on a quest whose route shows a "Way:"
-    line in the tooltip: the strip must not slide under those frames, and a long step is cut on
-    one line (hover shows it whole). With the tracker empty or collapsed it still sits somewhere
-    sensible.
+    A small dark strip with the monke icon sits at the bottom middle of the screen: under your
+    own and your target's frames, over the action bars and the cast bar, as wide as its words, and
+    covering nothing else. It stays centred as its text gets longer or shorter. Check it in Edit
+    Mode's other layouts too (Classic moves the unit frames to the top left; the gamepad layout
+    brings them closer to the middle), while casting, and on a quest with a long step: the line
+    is cut with "..." and hover shows it whole.
 18. Drag the line with the left mouse button: it follows the mouse, cannot leave the screen, and
-    letting go does not also pick a quest. `/dump MonkeDoDB.nowPoint` then shows `point`,
-    `relativePoint`, `x` and `y` (nil means the client left the frame anchored to something other
-    than UIParent after the drag: report it). `/monke now reset` puts it back above the tracker.
+    letting go does not also pick a quest. `/dump MonkeDoDB.nowPoint` then shows `point` CENTER,
+    `relativePoint` BOTTOM, `x` and `y` (nil: report it), and a longer step afterwards grows both
+    ways from where it was left. `/monke now reset` puts it back at the bottom middle. While the
+    beta does not load saved settings, a relog also puts it back there.
 19. Walk toward the quest: the distance drops about once a second, in steps of 10 yards, and
     agrees with Blizzard's arrow and the map. Under 30 yards it says "close" (plain: "nearby").
     On another continent or inside an instance there is no distance, and no error.
-20. Kill or loot for the objective on the line: the count, e.g. `(4/10)`, updates within a moment,
-    also mid-fight. After the last objective the line switches to the turn-in line.
+20. Kill or loot for the objective on the line: it counts down ("Grab 7 more ...", "Grab 6 more
+    ...") within a moment, also mid-fight. Before the first one it says the whole amount ("Grab
+    10 ..."), with no "more". After the last objective the line switches to the turn-in line.
 21. Super-track a quest whose next step is in another zone or across water: the tooltip has a
     "Way: ..." line (plain: "Next: ..."); the strip stays one line. The middle dot before the
     distance and the dash in the chat line of item 26 show as characters, not boxes.
@@ -107,7 +114,7 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
     `/monke pick` and a left-click on the line do the same, also in combat. A picked quest you
     are not watching stays off Blizzard's tracker (Monke Do does not add watches, to keep the
     tracker untainted); the strip still shows it.
-23. With nothing super-tracked the line reads "Now: nothing. Click, Monke pick." With an empty quest
+23. With nothing super-tracked the line reads "Nothing now. Click: Monke pick." With an empty quest
     log, a pick says "No quest. Monke go find quest giver." for a few seconds.
 24. Right-click the line: nothing happens (by design: opening Blizzard's map from addon code taints
     the map and the tracker, and Blizzard's next map refresh in combat gets blocked). Press M: the
@@ -119,9 +126,30 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 26. `/monke now off` hides the line; a pick then prints one chat line ("Monke pick: <quest> — <next
     step> · <distance>"). `/monke now on` and the "Now line" checkbox in the settings panel bring
     it back. `/monke voice plain` changes its words at once.
-27. Resume cue: after a loading screen (hearthstone, boat, instance portal), a moment after it has
-    faded, and when a fight ends, the line glows gold twice over about two seconds. The text stays
-    readable through the glow. Nothing glows during a fight or when no quest is tracked.
+27. Fights: when one starts the line fades to about a third, still readable, and hovering it
+    shows it whole. Resume cue: after a loading screen (hearthstone, boat, instance portal), a
+    moment after it has faded, and when a fight ends, the line comes back and glows gold twice
+    over about two seconds. The text stays readable through the glow. Nothing glows during a
+    fight or when no quest is tracked.
 28. Collapse a zone header in the quest log: Monke pick still finds the quests under it. It never
     picks a failed quest, a world quest or a bonus objective.
 29. With BugSack open through all of the above: no Lua error, no taint warning, no "action blocked".
+
+## The pointer
+
+30. Follow a quest in the open world: the monke icon at the start of the Now line becomes a
+    pointing monke finger. Turn on the spot in a full circle: the finger turns the other way and
+    keeps pointing at the quest, the same way as the gold arrow on the edge of the minimap (and
+    toward the quest's area with the map open). Walk the way it points: the distance on the line
+    goes down. The finger reads at a glance, hangs only a little over the strip and does not
+    touch the words. `/monke pointer arrow` (or the "Gold arrow" checkbox) swaps in a gold arrow
+    that points the same way; `/monke pointer finger` brings the finger back.
+31. Within about 30 yards of the spot the pointer turns back into the monke icon. Once the quest is
+    ready, it points at whoever takes it in.
+32. A quest in the next zone over: the pointer points toward it. One that needs a boat or a portal:
+    it points at the boat or portal first (the tooltip's "Way:" line). One on another continent:
+    the monke icon, no arrow.
+33. Inside a dungeon: the monke icon, no pointer, no error. A quest with no map marker (some new
+    Forever quests): the monke icon.
+34. A few minutes of questing with the pointer turning: no frame-rate drop. It turns 25 times a
+    second, and only while the line shows a quest.

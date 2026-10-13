@@ -18,15 +18,17 @@ Monke get: 875 XP, 4s
 - Every quest gets a task list, even ones the database has not seen yet. Quests without a
   summary show the game's own one-line version, never the wall of text.
 - The quest log shows your tasks once, at the top, under "Monke do:".
-- **The Now line**: one line above the quest tracker with the single next thing to do for the
-  quest you are following, and how far away it is: `Now: Grab 10 Red Silk Bandana (3/10) ·
-  240 yd`. It pulses after a loading screen or a fight, for "what was I doing?".
+- **The Now line**: one short line at the bottom middle of the screen, where your eyes already
+  are, with the single next thing to do for the quest you are following and how far away it
+  is: `Grab 7 more Red Silk Bandana · 240 yd`. A monke finger at its start points the way,
+  turning as you turn (`/monke pointer arrow` swaps in a gold arrow). It fades during a fight and glows when one ends or after a loading
+  screen, for "what was I doing?". Drag it anywhere.
 - **Monke pick**: "which quest now?" in one key. It picks a quest you can hand in, otherwise the
   nearest one, and points the game's own arrow at it. Press again for another. Set the key in
   Options > Keybindings > AddOns, or click the Now line, or type `/monke pick`.
 
 `/monke` opens the settings. `/monke help` lists the commands. `/monke now off` hides the Now
-line; `/monke now reset` puts it back above the tracker.
+line; `/monke now reset` puts it back at the bottom middle.
 
 ## What it collects
 

@@ -54,6 +54,55 @@ describe("Display", function()
         assert.are.equal("Monke do:", QuestInfoObjectivesHeader:GetText())
     end)
 
+    -- Build 1.60.1.70338 fades the quest giver's description in and never clears the gradient
+    -- afterwards (QuestFrameDetailPanel_OnShow / _OnUpdate in QuestFrame.lua).
+    describe("description fade", function()
+        local LONG = ("Blizzard tells a long story here. "):rep(12)
+
+        it("plays over the Monke text", function()
+            WowStubs.showQuest("detail")
+            assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
+            assert.are.equal(0, QuestInfoDescriptionText.gradient[1])
+            WowStubs.fadeQuestText()
+            assert.is_nil(QuestFrameDetailPanel.fading)
+            assert.are.equal(0, WowStubs.hiddenCharacters(QuestInfoDescriptionText))
+        end)
+
+        it("shows all of Blizzard's text when toggled after the fade", function()
+            WowStubs.quest.description = LONG
+            WowStubs.showQuest("detail")
+            WowStubs.fadeQuestText() -- stops just past the short Monke text
+            ns.Core.ToggleOriginal()
+            assert.are.equal(LONG, QuestInfoDescriptionText:GetText())
+            assert.are.equal(0, WowStubs.hiddenCharacters(QuestInfoDescriptionText))
+            ns.Core.ToggleOriginal()
+            assert.are.equal(RECORD_214.l, QuestInfoDescriptionText:GetText())
+            assert.are.equal(0, WowStubs.hiddenCharacters(QuestInfoDescriptionText))
+        end)
+
+        it("leaves a fade that is still running to Blizzard", function()
+            WowStubs.quest.description = LONG
+            WowStubs.showQuest("detail")
+            WowStubs.fadeQuestText(0.25)
+            local start = QuestInfoDescriptionText.gradient[1]
+            ns.Core.ToggleOriginal()
+            assert.are.equal(start, QuestInfoDescriptionText.gradient[1])
+            WowStubs.fadeQuestText()
+            assert.are.equal(0, WowStubs.hiddenCharacters(QuestInfoDescriptionText))
+        end)
+
+        it("does not leave the map details cut off where a quest giver's fade stopped", function()
+            ns.Core.ToggleOriginal() -- Blizzard's own text throughout
+            WowStubs.quest.description = "Short."
+            WowStubs.showQuest("detail")
+            WowStubs.fadeQuestText()
+            WowStubs.quest.description = LONG
+            WowStubs.showQuest("log")
+            assert.are.equal(LONG, QuestInfoDescriptionText:GetText())
+            assert.are.equal(0, WowStubs.hiddenCharacters(QuestInfoDescriptionText))
+        end)
+    end)
+
     it("restores the original even when Monke Do had emptied the description", function()
         ns.Core.Set("showLore", false) -- no lore and no group line: the description becomes ""
         WowStubs.showQuest("detail")
@@ -597,6 +646,7 @@ describe("globals", function()
             local ns = WowStubs.load()
             WowStubs.login()
             WowStubs.showQuest("detail")
+            WowStubs.fadeQuestText()
             WowStubs.showQuest("log")
             WowStubs.showQuest("reward")
             WowStubs.showQuest("progress")

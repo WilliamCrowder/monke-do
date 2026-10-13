@@ -65,13 +65,16 @@ local function newFontString(text)
         end
         return height
     end
+    -- 6 px per character; colour codes take no room, as on the real client.
     function fs:GetStringWidth()
+        local plain = (self.text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
         local widest = 0
-        for line in ((self.text or "") .. "\n"):gmatch("(.-)\n") do
+        for line in (plain .. "\n"):gmatch("(.-)\n") do
             widest = math.max(widest, 6 * #line)
         end
         return widest
     end
+    fs.GetUnboundedStringWidth = fs.GetStringWidth -- the fake never cuts, so both agree
     function fs:SetTextColor(r, g, b, a)
         self.color = { r, g, b, a }
     end
@@ -115,9 +118,26 @@ local function newFontString(text)
         self.maxLines = lines
     end
     function fs:SetShadowOffset() end
+    -- Characters before `start` are solid, the next `length` fade out, the rest are hidden.
+    -- Answers whether `start` is still inside the text (Blizzard's fade stops when it is not).
+    -- Whether SetText clears the gradient on the real client is not known; the fake keeps it,
+    -- which is the worse case.
+    function fs:SetAlphaGradient(start, length)
+        self.gradient = { start, length }
+        return start < #(self.text or "")
+    end
     return fs
 end
 WowStubs.newFontString = newFontString
+
+-- How many characters of a fontstring's text are not fully visible under its alpha gradient.
+function WowStubs.hiddenCharacters(fontString)
+    local text = fontString.text or ""
+    if not fontString.gradient then
+        return 0
+    end
+    return math.max(0, #text - math.floor(fontString.gradient[1]))
+end
 
 local function newFrame(frameType, name, parent, template)
     local frame = {
@@ -171,7 +191,9 @@ local function newFrame(frameType, name, parent, template)
     end
     function frame:CreateTexture()
         local texture = {}
-        function texture:SetSize() end
+        function texture:SetSize(width, height)
+            self.size = { width, height }
+        end
         function texture:SetPoint() end
         function texture:SetAllPoints() end
         function texture:SetColorTexture(r, g, b, a)
@@ -183,8 +205,19 @@ local function newFrame(frameType, name, parent, template)
         function texture:SetAlpha(alpha)
             self.alpha = alpha
         end
-        function texture:Show() end
-        function texture:Hide() end
+        function texture:SetRotation(radians)
+            self.rotation = radians
+        end
+        texture.shown = true
+        function texture:Show()
+            self.shown = true
+        end
+        function texture:Hide()
+            self.shown = false
+        end
+        function texture:IsShown()
+            return self.shown
+        end
         return texture
     end
     function frame:CreateFontString()
@@ -215,6 +248,15 @@ local function newFrame(frameType, name, parent, template)
     end
     function frame:GetHeight()
         return self.height or 0
+    end
+    -- Where a frame is on screen is not simulated: a spec sets `center` (and UIParent has one).
+    function frame:GetCenter()
+        if self.center then
+            return self.center[1], self.center[2]
+        end
+    end
+    function frame:GetBottom()
+        return self.bottom
     end
     function frame:SetAlpha(alpha)
         self.alpha = alpha
@@ -339,6 +381,7 @@ local OWNED = {
     "QuestFrame", "QuestFrameProgressPanel", "QuestInfoFrame", "QuestInfo_Display",
     "QuestInfoDescriptionText", "QuestInfoObjectivesText", "QuestInfoRewardText", "QuestProgressText",
     "QuestMapFrame", "QuestDetailScrollFrame", "QuestObjectiveTracker", "CampaignQuestObjectiveTracker",
+    "QuestFrameDetailPanel", "QUEST_DESCRIPTION_GRADIENT_LENGTH", "QUEST_DESCRIPTION_GRADIENT_CPS",
     -- quest log view pieces
     "QuestInfoObjectivesFrame", "QuestInfoObjectivesHeader", "QuestInfoDescriptionHeader",
     "GetObjectiveText", "GetQuestLogQuestText", "GetNumQuestLeaderBoards", "GetQuestLogLeaderBoard",
@@ -347,6 +390,8 @@ local OWNED = {
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
     "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails",
     "MonkeDo_Pick", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame",
+    -- the Now line's arrow
+    "C_Map", "GetPlayerFacing", "GetQuestUiMapID", "CreateVector2D",
 }
 
 function WowStubs.reset()
@@ -365,6 +410,17 @@ function WowStubs.reset()
     WowStubs.inCombat = false
     WowStubs.sounds = {}
     WowStubs.openedQuest = nil  -- last QuestMapFrame_OpenToQuestDetails(questID)
+    WowStubs.instantQuestText = false -- the instantQuestText CVar; off means the description fades in
+    -- Where the player is: a map, a spot on it (x east, y south, 0..1) and facing (0 north,
+    -- counter-clockwise). mapID nil = inside an instance: no map, no position, no facing.
+    WowStubs.player = { mapID = 1412, x = 0.5, y = 0.5, facing = 0 }
+    -- Fake maps: size in yards and where the top left corner sits in a flat world per continent.
+    WowStubs.maps = {
+        [1412] = { name = "Mulgore", width = 3000, height = 2000, left = 0, top = 0, continent = 1, parent = 1414 },
+        [1413] = { name = "The Barrens", width = 4000, height = 6000, left = 3000, top = -1000, continent = 1, parent = 1414 },
+        [1414] = { name = "Kalimdor", width = 20000, height = 30000, left = -8000, top = -12000, continent = 1, parent = 947 },
+        [1429] = { name = "Elwynn Forest", width = 3500, height = 2300, left = 0, top = 0, continent = 0, parent = 1415 },
+    }
 
     print = function(...)
         local parts = {}
@@ -485,6 +541,26 @@ function WowStubs.reset()
             local entry = entryFor(questID)
             return entry and entry.waypoint or nil
         end,
+        -- entry.nextWaypoint = { mapID, x, y }: a boat or a portal on the way. MayReturnNothing.
+        GetNextWaypoint = function(questID)
+            local entry = entryFor(questID)
+            local way = entry and entry.nextWaypoint
+            if way then
+                return way[1], way[2], way[3]
+            end
+        end,
+        -- entry.marker = { mapID, x, y }: the quest's map marker, listed on that map only.
+        GetQuestsOnMap = function(mapID)
+            local markers = {}
+            for _, entry in ipairs(WowStubs.log) do
+                local m = entry.marker
+                if m and m[1] == mapID then
+                    markers[#markers + 1] = { questID = entry.questID, mapID = m[1], x = m[2], y = m[3],
+                        numObjectives = #(entry.objectives or {}), isQuestStart = false, isDaily = false }
+                end
+            end
+            return markers
+        end,
         ReadyForTurnIn = function(questID)
             local entry = entryFor(questID)
             return entry and entry.ready or false
@@ -496,6 +572,62 @@ function WowStubs.reset()
         IsFailed = function(questID)
             local entry = entryFor(questID)
             return entry and entry.failed or false
+        end,
+    }
+
+    CreateVector2D = function(x, y)
+        local vector = { x = x, y = y }
+        function vector:GetXY()
+            return self.x, self.y
+        end
+        return vector
+    end
+    GetQuestUiMapID = function(questID)
+        local entry = entryFor(questID)
+        return entry and entry.marker and entry.marker[1] or 0
+    end
+    GetPlayerFacing = function()
+        if WowStubs.player.mapID then
+            return WowStubs.player.facing
+        end
+    end
+    C_Map = {
+        GetBestMapForUnit = function(unit)
+            if unit == "player" then
+                return WowStubs.player.mapID
+            end
+        end,
+        GetPlayerMapPosition = function(mapID, unit)
+            local player = WowStubs.player
+            if unit == "player" and player.mapID and mapID == player.mapID and player.x then
+                return CreateVector2D(player.x, player.y)
+            end
+        end,
+        GetMapWorldSize = function(mapID)
+            local map = WowStubs.maps[mapID]
+            if map then
+                return map.width, map.height
+            end
+            return 0, 0
+        end,
+        GetMapInfo = function(mapID)
+            local map = WowStubs.maps[mapID]
+            if map then
+                return { mapID = mapID, name = map.name, mapType = 3, parentMapID = map.parent or 0, flags = 0 }
+            end
+        end,
+        GetWorldPosFromMapPos = function(mapID, position)
+            local map = WowStubs.maps[mapID]
+            if map then
+                return map.continent, CreateVector2D(map.left + position.x * map.width, map.top + position.y * map.height)
+            end
+        end,
+        GetMapPosFromWorldPos = function(continent, world, overrideMapID)
+            local map = WowStubs.maps[overrideMapID]
+            if map and map.continent == continent then
+                return overrideMapID,
+                    CreateVector2D((world.x - map.left) / map.width, (world.y - map.top) / map.height)
+            end
         end,
     }
 
@@ -541,6 +673,10 @@ function WowStubs.reset()
     end
     UIParent = newFrame("Frame", "UIParent")
     UIParent.shown = true
+    UIParent:SetWidth(1024)
+    UIParent:SetHeight(768)
+    UIParent.center = { 512, 384 }
+    UIParent.bottom = 0
     ObjectiveTrackerFrame = newFrame("Frame", "ObjectiveTrackerFrame")
     ObjectiveTrackerFrame.shown = true
     PlaySound = function(kit)
@@ -590,7 +726,10 @@ function WowStubs.reset()
     end
 
     QuestFrame = newFrame("Frame", "QuestFrame")
+    QuestFrameDetailPanel = newFrame("Frame", "QuestFrameDetailPanel")
     QuestFrameProgressPanel = newFrame("Frame", "QuestFrameProgressPanel")
+    QUEST_DESCRIPTION_GRADIENT_LENGTH = 30 -- QuestFrame.lua, build 1.60.1.70338
+    QUEST_DESCRIPTION_GRADIENT_CPS = 70
     QuestDetailScrollFrame = newFrame("ScrollFrame", "QuestDetailScrollFrame")
     QuestDetailScrollFrame.shown = true
     QuestMapFrame = { DetailsFrame = newFrame("Frame", "QuestMapDetails") }
@@ -746,14 +885,53 @@ function WowStubs.click(frame, button)
     end
 end
 
+-- The quest giver's panels take turns; hiding the detail panel ends its fade (OnHide).
+local function hideDetailPanel()
+    QuestFrameDetailPanel:Hide()
+    QuestFrameDetailPanel.fading = nil
+end
+
 function WowStubs.showQuest(kind)
     if kind == "progress" then
+        hideDetailPanel()
         QuestProgressText:SetText(WowStubs.quest.progressText)
         QuestProgressText:Show()
         QuestFrameProgressPanel:Show()
         return
     end
-    QuestInfo_Display({ questLog = (kind == "log"), reward = (kind == "reward") })
+    if kind == "log" then
+        QuestInfo_Display({ questLog = true })
+        return
+    end
+    if kind == "reward" then
+        hideDetailPanel()
+        QuestInfo_Display({ reward = true })
+        return
+    end
+    -- QuestFrameDetailPanel_OnShow: QuestInfo_Display first, then the description fade starts
+    -- at the first character (unless Instant Quest Text is on).
+    hideDetailPanel()
+    QuestFrameDetailPanel:Show()
+    QuestInfo_Display({ questLog = false, reward = false })
+    QuestFrameDetailPanel.fading = 1
+    QuestFrameDetailPanel.fadingProgress = 0
+    QuestInfoDescriptionText:SetAlphaGradient(0, QUEST_DESCRIPTION_GRADIENT_LENGTH)
+    if WowStubs.instantQuestText then
+        QuestFrameDetailPanel.fadingProgress = 1024
+    end
+end
+
+-- QuestFrameDetailPanel_OnUpdate at 60 frames a second, for `seconds` or until the fade ends.
+function WowStubs.fadeQuestText(seconds)
+    local panel = QuestFrameDetailPanel
+    local step, elapsed = 1 / 60, 0
+    while panel.fading and (seconds == nil or elapsed < seconds) do
+        elapsed = elapsed + step
+        panel.fadingProgress = panel.fadingProgress + step * QUEST_DESCRIPTION_GRADIENT_CPS
+        if not QuestInfoDescriptionText:SetAlphaGradient(panel.fadingProgress, QUEST_DESCRIPTION_GRADIENT_LENGTH) then
+            panel.fading = nil
+        end
+    end
 end
 
 function WowStubs.fire(event, ...)

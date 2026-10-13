@@ -262,6 +262,23 @@ These correct assumptions in the build plan. Workers rely on these, not the plan
 - The Forever client's own UI source is public: branch `forever` of
   https://github.com/Gethe/wow-ui-source (1.60.1.69913). It loads the Mainline quest frame,
   map and tracker files plus small `Camelot` overrides. Check Blizzard behaviour there first.
+- Checked again on 2026-10-12 against build 1.60.1.70338 (still interface 16001). New since
+  69913: the quest giver page fades its description in (`QuestFrameDetailPanel_OnShow` /
+  `_OnUpdate` in `QuestFrame.lua`: `SetAlphaGradient` moving 70 characters a second; objectives,
+  headers and rewards stay invisible and Accept stays disabled until it ends; off when the
+  `instantQuestText` CVar is set). `QuestInfo_Display` runs before the fade starts, so the fade
+  plays over Monke text. Nothing in Blizzard's code clears the gradient after the fade, so
+  Display shows the whole description after each of its redraws when no fade is running. The
+  tracker now appends quest tags such as "(Elite)" to quest titles; Monke Do rewrites objective
+  lines only, so this does not touch it.
+- The Now line's arrow uses `C_Map.GetBestMapForUnit`, `GetPlayerMapPosition`, `GetMapWorldSize`,
+  `GetMapInfo`, `GetWorldPosFromMapPos`, `GetMapPosFromWorldPos`, `C_QuestLog.GetNextWaypoint`,
+  `GetQuestsOnMap` (rows carry `questID`, `mapID`, `x`, `y`), `GetQuestUiMapID`, `GetPlayerFacing`
+  and `CreateVector2D`. All are in build 70338's API documentation or dump, and none returns a
+  secret value. Map x grows east and y south; `GetPlayerFacing` is 0 for north, counter-clockwise.
+  Forever ships Blizzard's own on-screen guide (`Blizzard_QuestNavigation`, atlas
+  `Navigation-Tracked-Arrow`, drawn pointing up), but Forever's settings have no option to turn
+  it on.
 - Calling Blizzard's map code from addon code (`QuestMapFrame_OpenToQuestDetails` and the
   like) leaves the map and tracker state tainted, and their next refresh in combat is
   blocked. The Now line therefore never opens the map; super-tracking is enough.

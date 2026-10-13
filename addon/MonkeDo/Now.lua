@@ -1,8 +1,13 @@
--- Now.lua: the Now line. One small frame above the objective tracker that says the ONE next
--- thing to do for the super-tracked quest, and how far away it is, on one line:
---     Now: Grab 10 Red Silk Bandana (3/10) · 120 yards
--- The tooltip adds the full line (in case it was cut), the game's route ("Way: Take the boat to
--- Menethil Harbor") and the actions. Left-click is Monke pick, left-drag moves it.
+-- Now.lua: the Now line. A small strip at the bottom middle of the screen, where the eyes
+-- already are, that says the ONE next thing to do for the super-tracked quest and how far away
+-- it is:
+--     [pointer] Take 7 more Red Silk Bandana off bad men · 120 yd
+-- The pointer, a monke finger (or a gold arrow, a setting), turns toward the quest (Arrow.lua);
+-- where it cannot (close by, an instance, a quest with no map marker) the monke icon stands in
+-- its place. The strip sits under the player
+-- and target frames, as wide as its words, fades during a fight and glows when one ends. The
+-- tooltip adds the quest, the game's route ("Way: Take the boat to Menethil Harbor") and the
+-- actions. Left-click is Monke pick, left-drag moves it.
 -- It is the addon's own frame, not a hook into Blizzard's tracker, and it is not secure.
 -- It never calls Blizzard's map code (QuestMapFrame_*): doing that from addon code leaves the
 -- map and tracker state tainted, and Blizzard's next redraw of them in combat is blocked. The
@@ -15,28 +20,41 @@ local Compose = ns.Compose
 local Rules = ns.Rules
 local Voice = ns.Voice
 local Pick = ns.Pick
+local Arrow = ns.Arrow
 
 local Now = {}
 ns.Now = Now
 
-local WIDTH = 260          -- when the objective tracker cannot tell us its width
-local MIN_HEIGHT = 20
-local PAD = 3
--- Between the line's bottom edge and the tracker's top. The frames Edit Mode stacks above the
--- tracker (durability figure, boss frames) can leave as little as 25 px, so the line stays one
--- line and hugs the tracker.
-local TRACKER_GAP = 1
+local MIN_HEIGHT = 24
+local PAD = 5              -- inside the strip, around the icon and the words
+local ICON_SIZE = 18       -- the icon's slot; the finger hangs a little over it
+local ICON_GAP = 7
+local ICON = "Interface\\AddOns\\MonkeDo\\Media\\icon.png"
+local FINGER = "Interface\\AddOns\\MonkeDo\\Media\\finger.png" -- both drawn pointing up
+local ARROW = "Interface\\AddOns\\MonkeDo\\Media\\arrow.png"
+local FINGER_SIZE = 26
+local ARROW_SIZE = 20
+local ARROW_SECONDS = 0.04 -- the arrow turns 25 times a second while a quest is on the line
+-- The longest the words get before they are cut (the tooltip has them whole). The gamepad
+-- preset leaves 370 between the player and target frames; this keeps the strip inside that.
+local MAX_TEXT_WIDTH = 310
+-- The strip's centre, above the bottom middle of the screen: over the action bars and the cast
+-- bar, under the player and target frames (Blizzard's preset layouts put their bottom edges
+-- 250 and 295 up, and Forever's own layout looks the same).
+local DEFAULT_Y = 230
+local COMBAT_ALPHA = 0.35  -- faded, not gone: a kill count still moves during the fight
 local REFRESH_DELAY = 0.2  -- QUEST_LOG_UPDATE comes in bursts; redraw once per burst
 local TICK_SECONDS = 1     -- how often the distance is read while a quest is on the line
-local MESSAGE_SECONDS = 3  -- how long a message ("after the fight") stays up
+local MESSAGE_SECONDS = 3  -- how long a message ("No quest...") stays up
 local CUE_DELAY = 1        -- let the loading screen fade out before the resume cue
 local CLOSE_YARDS = 30
 local SEPARATOR = " \194\183 " -- a middle dot between the task and the distance
+local DISTANCE_COLOUR = "|cffb3b3b3" -- the distance in grey: the task is what to read first
 
 local EVENTS = {
     "SUPER_TRACKING_CHANGED", "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_ACCEPTED",
     "QUEST_REMOVED", "QUEST_TURNED_IN", "ZONE_CHANGED_NEW_AREA", "PLAYER_ENTERING_WORLD",
-    "PLAYER_REGEN_ENABLED",
+    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
 }
 
 local POINTS = {
@@ -52,6 +70,11 @@ local lineShown           -- the text on screen, so an unchanged redraw costs no
 local refreshPending = false
 local ticker
 local message, messageUntil
+local fighting = false    -- between PLAYER_REGEN_DISABLED and PLAYER_REGEN_ENABLED
+
+local function stripFinalStop(s)
+    return (s:gsub("[%.%s]+$", ""))
+end
 
 -- Words -------------------------------------------------------------------------------------
 
@@ -70,9 +93,39 @@ function Now.FormatDistance(distanceSq, voice)
     return Voice.Format("now_yards", voice, { n = math.floor(yards / step + 0.5) * step })
 end
 
+-- An objective with a count says what is still to do: "Take 10 Red Silk Bandana off bad men"
+-- with 3 of 10 done reads "Take 7 more Red Silk Bandana off bad men". The amount is swapped
+-- inside the bullet (the validator makes every bullet carry its amount), so the DB wording
+-- stays. Anything else keeps the game's progress, "(45%)", as does a bullet with no amount to
+-- swap ("(3/10)").
+local function stillToDo(task, objective, voice)
+    local need, have = objective.numRequired, objective.numFulfilled
+    if need == nil or have == nil then
+        local _, parsedHave, parsedNeed = Rules.ParseObjectiveText(objective.text)
+        have, need = have or parsedHave, need or parsedNeed
+    end
+    if Rules.COUNTED[objective.type] and type(need) == "number" and type(have) == "number" and need > 1 then
+        if have <= 0 then
+            return task -- nothing done yet: the bullet's own amount is what is left
+        end
+        if have < need then
+            local more = Voice.Format("now_more", voice, { n = need - have })
+            local swapped, swaps = task:gsub("%f[%d]" .. need .. "%f[%D]", more, 1)
+            if swaps == 1 then
+                return swapped
+            end
+        end
+    end
+    local progress = Rules.Progress(objective, voice)
+    if not progress then
+        return task
+    end
+    return stripFinalStop(task) .. " " .. progress
+end
+
 -- The one next thing for a quest in the log: the bullet of the first unfinished objective,
--- with its live progress, or the turn-in line once the quest is ready or every objective is
--- done. The bullets come from Compose, so the DB wording and both voices apply here too.
+-- saying what is left of it, or the turn-in line once the quest is ready or every objective
+-- is done. The bullets come from Compose, so the DB wording and both voices apply here too.
 function Now.NextStep(questID, voice)
     local objectives
     if C_QuestLog and C_QuestLog.GetQuestObjectives then
@@ -85,7 +138,6 @@ function Now.NextStep(questID, voice)
         record = Core.GetRecord(questID),
         objectives = objectives,
         voice = voice,
-        showProgress = true,
     })
     local tasks = sections.tasks
     local turnIn = tasks[#tasks] -- Compose always ends with the turn-in line
@@ -96,7 +148,7 @@ function Now.NextStep(questID, voice)
     local live = Rules.Visible(objectives)
     for i = 1, math.min(sections.numObjectiveTasks or 0, #live) do
         if not live[i].finished then
-            return tasks[i]
+            return stillToDo(tasks[i], live[i], voice)
         end
     end
     return turnIn
@@ -113,15 +165,18 @@ local function waypointText(questID)
     return text
 end
 
-local function withDistance(step, questID, voice)
+local function withDistance(step, questID, voice, colour)
     local distance = Now.FormatDistance(Pick.DistanceSq(questID), voice)
     if not distance then
         return step
     end
-    return (step:gsub("[%.%s]+$", "")) .. SEPARATOR .. distance
+    if colour then
+        return stripFinalStop(step) .. colour .. SEPARATOR .. distance .. "|r"
+    end
+    return stripFinalStop(step) .. SEPARATOR .. distance
 end
 
--- "Grab 10 Red Silk Bandana (3/10) · 120 yards". Monke pick uses this for its chat line
+-- "Take 7 more Red Silk Bandana off bad men · 120 yd". Monke pick uses this for its chat line
 -- when the Now line is off.
 function Now.Describe(questID, voice)
     voice = voice or Core.Get("voice")
@@ -152,19 +207,26 @@ end
 
 -- Drawing -----------------------------------------------------------------------------------
 
--- One line, never wrapped: a second line would grow up into the frames above the tracker.
-local function setLine(line)
-    if line == lineShown then
+-- One line, as wide as its words up to MAX_TEXT_WIDTH; past that it is cut and the tooltip has
+-- it whole. The strip hangs by its centre, so a longer line grows both ways and stays centred.
+local function setLine(text)
+    if text == lineShown then
         return
     end
-    lineShown = line
-    frame.monkeLine:SetText(line)
-    frame:SetHeight(math.max(MIN_HEIGHT, PAD * 2 + (frame.monkeLine:GetStringHeight() or 0)))
+    lineShown = text
+    local line = frame.monkeLine
+    line:SetText(text)
+    -- The unbounded width: GetStringWidth can answer the cut width of a line that was cut before.
+    local natural = line.GetUnboundedStringWidth and line:GetUnboundedStringWidth() or line:GetStringWidth()
+    local width = math.min(MAX_TEXT_WIDTH, math.ceil(tonumber(natural) or MAX_TEXT_WIDTH) + 1)
+    line:SetWidth(width)
+    frame:SetWidth(PAD + ICON_SIZE + ICON_GAP + width + PAD)
+    frame:SetHeight(math.max(MIN_HEIGHT, PAD * 2 + (line:GetStringHeight() or 0)))
 end
 
--- "Now: <next step> · <distance>".
+-- "<next step> · <distance>", the distance in grey.
 local function drawQuest(voice)
-    setLine(Voice.Get("now_prefix", voice) .. withDistance(stepShown, questShown, voice))
+    setLine(withDistance(stepShown, questShown, voice, DISTANCE_COLOUR))
 end
 
 local function messageUp()
@@ -175,7 +237,42 @@ local function messageUp()
     return false
 end
 
--- The distance is read once a second, and only while the line is shown with a quest on it.
+-- The pointer in the icon's place while it knows the way; the monke icon otherwise.
+function Now.PointArrow()
+    if not frame then
+        return
+    end
+    local turn = questShown and Arrow.Turn(questShown)
+    if turn then
+        frame.monkePointer:SetRotation(turn)
+        frame.monkePointer:Show()
+        frame.monkeIcon:Hide()
+    else
+        frame.monkePointer:Hide()
+        frame.monkeIcon:Show()
+    end
+end
+
+-- The monke finger, or the gold arrow for whoever reads an arrow more easily.
+local function pointerStyle()
+    local gold = Core.Get("goldArrow") and true or false
+    if frame.monkeGold ~= gold then
+        frame.monkeGold = gold
+        local size = gold and ARROW_SIZE or FINGER_SIZE
+        frame.monkePointer:SetTexture(gold and ARROW or FINGER)
+        frame.monkePointer:SetSize(size, size)
+    end
+end
+
+-- Faded during a fight, whole again under the mouse and when the fight ends.
+local function applyAlpha()
+    if frame then
+        frame:SetAlpha((fighting and not frame.monkeHover) and COMBAT_ALPHA or 1)
+    end
+end
+
+-- The distance is read once a second and the arrow turned 25 times a second, and both only
+-- while the line is shown with a quest on it.
 local function updateTicker()
     local wanted = frame ~= nil and frame:IsShown() and questShown ~= nil
     if wanted and not ticker and C_Timer and C_Timer.NewTicker then
@@ -185,6 +282,10 @@ local function updateTicker()
     elseif not wanted and ticker then
         ticker:Cancel()
         ticker = nil
+    end
+    if frame then
+        frame.monkeDriver:SetShown(wanted) -- its OnUpdate runs only while it is shown
+        Now.PointArrow()
     end
 end
 
@@ -203,6 +304,8 @@ function Now.Refresh()
         return
     end
     local voice = Core.Get("voice")
+    pointerStyle()
+    Arrow.Forget() -- the quest or its step may have changed
     questShown = trackedQuest()
     stepShown = questShown and Now.NextStep(questShown, voice) or nil
     if messageUp() then
@@ -216,8 +319,10 @@ function Now.Refresh()
     updateTicker()
 end
 
--- Between events only the distance moves, so the ticker redraws just that.
+-- Between events only the distance moves, so the ticker redraws just that, and has the arrow
+-- look its spot up again (waypoints and markers move on as the quest does).
 function Now.Tick()
+    Arrow.Forget()
     if not (frame and frame:IsShown() and questShown and stepShown) or messageUp() then
         return
     end
@@ -268,7 +373,7 @@ function Now.Cue()
     if not (frame and frame:IsShown() and questShown and frame.monkePulse) then
         return false
     end
-    if InCombatLockdown and InCombatLockdown() then
+    if fighting or (InCombatLockdown and InCombatLockdown()) then
         return false
     end
     frame.monkePulse:Stop()
@@ -289,34 +394,18 @@ local function savedPoint()
     return saved
 end
 
-local function lineWidth()
-    local tracker = ObjectiveTrackerFrame
-    local width = tracker and tracker.GetWidth and tracker:GetWidth()
-    if type(width) == "number" and width >= 180 and width <= 420 then
-        return width
-    end
-    return WIDTH
-end
-
--- The saved spot, else just above the objective tracker, left edges lined up, else under
--- the minimap where the tracker usually is.
+-- The saved spot, else the bottom middle of the screen (DEFAULT_Y).
 function Now.PlaceFrame()
     if not frame then
         return
     end
-    local width = lineWidth()
-    frame:SetWidth(width)
-    frame.monkeLine:SetWidth(width - PAD * 2)
-    lineShown = nil -- measure the height again on the next draw
-
+    lineShown = nil -- size the strip again on the next draw
     frame:ClearAllPoints()
     local saved = savedPoint()
     if saved then
         frame:SetPoint(saved.point, UIParent, saved.relativePoint, saved.x, saved.y)
-    elseif ObjectiveTrackerFrame then
-        frame:SetPoint("BOTTOMLEFT", ObjectiveTrackerFrame, "TOPLEFT", 0, TRACKER_GAP)
     else
-        frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -100, -240)
+        frame:SetPoint("CENTER", UIParent, "BOTTOM", 0, DEFAULT_Y)
     end
 end
 
@@ -326,7 +415,23 @@ function Now.ResetPosition()
     Now.Refresh()
 end
 
+-- Where a drag left the strip, kept by its centre (from the bottom middle of the screen) so a
+-- longer line still grows both ways. A client that cannot tell the centre keeps the anchor the
+-- drag left, as long as it hangs off UIParent.
 local function savePosition(self)
+    local cx, cy
+    if self.GetCenter then
+        cx, cy = self:GetCenter()
+    end
+    local ux = UIParent.GetCenter and UIParent:GetCenter()
+    local bottom = UIParent.GetBottom and UIParent:GetBottom() or 0
+    if type(cx) == "number" and type(cy) == "number" and type(ux) == "number" and type(bottom) == "number" then
+        local x, y = math.floor(cx - ux + 0.5), math.floor(cy - bottom + 0.5)
+        self:ClearAllPoints()
+        self:SetPoint("CENTER", UIParent, "BOTTOM", x, y)
+        Core.Store("nowPoint", { point = "CENTER", relativePoint = "BOTTOM", x = x, y = y })
+        return
+    end
     local point, relativeTo, relativePoint, x, y = self:GetPoint()
     if not POINTS[point] or type(x) ~= "number" or type(y) ~= "number" then
         return
@@ -341,15 +446,17 @@ end
 -- The frame ---------------------------------------------------------------------------------
 
 local function showTooltip(self)
+    self.monkeHover = true
+    applyAlpha()
     if not (GameTooltip and GameTooltip.SetOwner) then
         return
     end
     local voice = Core.Get("voice")
-    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
     GameTooltip:SetText(questShown and questTitle(questShown) or "Monke Do")
     if GameTooltip.AddLine then
         if questShown and stepShown then
-            -- The whole line, which a narrow tracker may have cut, and the game's route.
+            -- The whole line, in case it was cut, and the game's route.
             GameTooltip:AddLine(withDistance(stepShown, questShown, voice), 1, 0.82, 0, true)
             local way = waypointText(questShown)
             if way then
@@ -362,7 +469,11 @@ local function showTooltip(self)
     GameTooltip:Show()
 end
 
-local function hideTooltip()
+local function hideTooltip(self)
+    if self then
+        self.monkeHover = nil
+        applyAlpha()
+    end
     if GameTooltip then
         GameTooltip:Hide()
     end
@@ -398,7 +509,7 @@ local function createFrame()
         return nil
     end
     local f = CreateFrame("Button", "MonkeDoNowFrame", UIParent)
-    f:SetWidth(WIDTH)
+    f:SetWidth(PAD * 2 + ICON_SIZE)
     f:SetHeight(MIN_HEIGHT)
     f:SetFrameStrata("LOW")
     f:SetClampedToScreen(true)
@@ -409,10 +520,10 @@ local function createFrame()
 
     local background = f:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints()
-    background:SetColorTexture(0, 0, 0, 0.5)
+    background:SetColorTexture(0, 0, 0, 0.45)
 
-    -- Layers: the dark background, then the glow for the resume cue, then the text on its
-    -- own frame so the glow never covers the words. Neither child takes the mouse.
+    -- Layers: the dark background, then the glow for the resume cue, then the icon and the text
+    -- on their own frame so the glow never covers the words. Neither child takes the mouse.
     local glow = CreateFrame("Frame", nil, f)
     fill(glow, f)
     glow:SetFrameLevel(f:GetFrameLevel() + 1)
@@ -425,8 +536,30 @@ local function createFrame()
     local body = CreateFrame("Frame", nil, f)
     fill(body, f)
     body:SetFrameLevel(f:GetFrameLevel() + 2)
-    local line = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium") -- a size up from the tracker
-    line:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -PAD)
+    local icon = body:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(ICON_SIZE, ICON_SIZE)
+    icon:SetPoint("LEFT", f, "LEFT", PAD, 0)
+    icon:SetTexture(ICON) -- the monke says "now"; no word needed
+    f.monkeIcon = icon
+    local pointer = body:CreateTexture(nil, "ARTWORK") -- its picture and size: pointerStyle
+    pointer:SetPoint("CENTER", icon, "CENTER", 0, 0)
+    pointer:Hide()
+    f.monkePointer = pointer
+
+    -- Turns the pointer while a quest is on the line; hidden, and so idle, otherwise.
+    local driver = CreateFrame("Frame", nil, f)
+    driver:Hide()
+    local sinceTurn = 0
+    driver:SetScript("OnUpdate", function(_, elapsed)
+        sinceTurn = sinceTurn + (tonumber(elapsed) or 0)
+        if sinceTurn >= ARROW_SECONDS then
+            sinceTurn = 0
+            Now.PointArrow()
+        end
+    end)
+    f.monkeDriver = driver
+    local line = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
+    line:SetPoint("LEFT", icon, "RIGHT", ICON_GAP, 0)
     line:SetJustifyH("LEFT")
     line:SetWordWrap(false) -- one line; the tooltip has the rest
     if line.SetMaxLines then
@@ -473,6 +606,8 @@ local function onEvent(_, event)
     if event == "SUPER_TRACKING_CHANGED" then
         Now.Refresh()
     elseif event == "PLAYER_ENTERING_WORLD" then
+        fighting = InCombatLockdown and InCombatLockdown() and true or false
+        applyAlpha()
         Now.Refresh()
         if C_Timer and C_Timer.After then
             C_Timer.After(CUE_DELAY, function()
@@ -481,7 +616,13 @@ local function onEvent(_, event)
         else
             Now.Cue()
         end
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        -- InCombatLockdown() can still say false while this event runs, hence the flag.
+        fighting = true
+        applyAlpha()
     elseif event == "PLAYER_REGEN_ENABLED" then
+        fighting = false
+        applyAlpha()
         Now.Cue()
     else
         refreshSoon()
@@ -504,5 +645,7 @@ function Now.Enable()
     end
     frame:SetScript("OnEvent", onEvent)
     Core.OnChange(Now.Refresh)
+    fighting = InCombatLockdown and InCombatLockdown() and true or false
+    applyAlpha()
     Now.Refresh()
 end

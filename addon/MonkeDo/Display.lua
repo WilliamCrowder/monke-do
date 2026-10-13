@@ -210,6 +210,20 @@ local function shown(widget)
     return widget and widget.IsShown and widget:IsShown()
 end
 
+-- The quest giver page fades its description in (QuestFrameDetailPanel_OnUpdate moves an alpha
+-- gradient 70 characters a second). QuestInfo_Display runs before the fade starts, so the fade
+-- plays over our text. Blizzard never clears the gradient when the fade ends, though, so a longer
+-- text put into the same fontstring later (the toggle, or the map's quest details) would stay
+-- cut off where the fade stopped. With no fade running, show all of it, as Instant Quest Text does.
+local function revealAll(fontString)
+    local panel = QuestFrameDetailPanel
+    if (panel and panel.fading) or not (fontString and fontString.SetAlphaGradient) then
+        return -- a running fade reaches the end of whatever text is there by itself
+    end
+    local text = fontString:GetText() or ""
+    fontString:SetAlphaGradient(#text + 1024, QUEST_DESCRIPTION_GRADIENT_LENGTH or 30)
+end
+
 -- Runs after every QuestInfo_Display: quest giver detail and reward pages, the map quest
 -- details and the quest log popup all come through here.
 --
@@ -238,6 +252,7 @@ function Display.ApplyQuestInfo()
     local description = QuestInfoDescriptionText
     if shown(description) then
         swap(description, Compose.DescriptionText(sections, blizzardText(description), sentence))
+        revealAll(description)
     end
     if shown(QuestInfoObjectivesText) then
         if logView then
