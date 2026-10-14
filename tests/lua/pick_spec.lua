@@ -160,15 +160,18 @@ describe("Monke pick", function()
             assert.are.same({ 875 }, WowStubs.sounds)
         end)
 
-        it("moves on from the quest already super-tracked, and wraps at the end", function()
+        it("moves on from the quest already super-tracked, then tracks nothing, then starts over", function()
             quest(30, 200)
             quest(31, 50)
             quest(32, 400, { ready = true }) -- ranking: 32, 31, 30
             WowStubs.superTracked = 31
             assert.are.equal(30, Pick.Next())
+            assert.are.equal(0, Pick.Next()) -- after the last: nothing, so Blizzard's arrow goes away
+            assert.are.equal(0, WowStubs.superTracked)
+            assert.are.equal("Nothing now. Click: Monke pick.", nowLine())
             assert.are.equal(32, Pick.Next())
             assert.are.equal(31, Pick.Next())
-            assert.are.equal(3, #WowStubs.sounds)
+            assert.are.equal(4, #WowStubs.sounds)
         end)
 
         it("starts at the top when the super-tracked quest is not one it would pick", function()
@@ -179,9 +182,10 @@ describe("Monke pick", function()
             assert.are.equal(31, Pick.Next())
         end)
 
-        it("keeps the only quest there is", function()
+        it("with one quest, swaps between it and nothing", function()
             quest(30, 200)
             assert.are.equal(30, Pick.Next())
+            assert.are.equal(0, Pick.Next())
             assert.are.equal(30, Pick.Next())
         end)
 
@@ -221,6 +225,9 @@ describe("Monke pick", function()
             assert.are.equal(214, Pick.Next())
             assert.are.same({ "|cffd2a679Monke Do|r: Monke pick: Red Silk Bandanas" .. DASH ..
                 "Grab 7 more Red Silk Bandana" .. DOT .. "120 yd" }, WowStubs.printed)
+            WowStubs.printed = {}
+            assert.are.equal(0, Pick.Next())
+            assert.are.same({ "|cffd2a679Monke Do|r: Monke pick: nothing. Monke rest." }, WowStubs.printed)
             ns.Core.Set("voice", "plain")
             WowStubs.printed = {}
             Pick.Next()
@@ -264,6 +271,8 @@ describe("Monke pick", function()
             assert.are.equal(31, MonkeDo_Pick())
             SlashCmdList["MONKEDO"]("pick")
             assert.are.equal(30, WowStubs.superTracked)
+            WowStubs.click(ns.Now.frame, "LeftButton")
+            assert.are.equal(0, WowStubs.superTracked)
             WowStubs.click(ns.Now.frame, "LeftButton")
             assert.are.equal(31, WowStubs.superTracked)
         end)

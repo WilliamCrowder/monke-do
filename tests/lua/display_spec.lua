@@ -574,12 +574,16 @@ describe("Tracker", function()
         return { usedLines = usedLines }
     end
 
+    -- Quest 214 is watched, and its block is `trackerBlock`. Asking the tracker to redraw from
+    -- addon code taints it (and through it Edit Mode), so MarkDirty fails the spec.
     local function installTracker(trackerBlock)
         _G.QuestObjectiveTracker = {
             UpdateSingle = function() end,
-            GetExistingBlock = function() return trackerBlock end,
-            MarkDirty = function(self) self.dirty = (self.dirty or 0) + 1 end,
+            GetExistingBlock = function(_, questID) return questID == 214 and trackerBlock or nil end,
+            MarkDirty = function() error("the tracker must never be marked dirty from addon code") end,
         }
+        _G.C_QuestLog.GetNumQuestWatches = function() return 1 end
+        _G.C_QuestLog.GetQuestIDForQuestWatchIndex = function(index) return index == 1 and 214 or nil end
     end
 
     before_each(function()
@@ -619,7 +623,6 @@ describe("Tracker", function()
         ns.Core.Set("tracker", false)
         QuestObjectiveTracker:UpdateSingle(quest)
         assert.are.equal("3/10 Red Silk Bandana", b.usedLines[1].Text:GetText())
-        assert.are.equal(1, QuestObjectiveTracker.dirty)
 
         ns.Core.Set("tracker", true)
         ns.Core.ToggleOriginal()
@@ -628,8 +631,33 @@ describe("Tracker", function()
 
         ns.Core.ToggleOriginal()
         WowStubs.quest.objectives[1].finished = true
+        b.usedLines[1].Text:SetText("10/10 Red Silk Bandana") -- Blizzard redraws the line first
         QuestObjectiveTracker:UpdateSingle(quest)
-        assert.are.equal("3/10 Red Silk Bandana", b.usedLines[1].Text:GetText())
+        assert.are.equal("10/10 Red Silk Bandana", b.usedLines[1].Text:GetText())
+    end)
+
+    it("the toggle and the setting swap the lines on screen, without redrawing the tracker", function()
+        local b = block({ "3/10 Red Silk Bandana" })
+        installTracker(b)
+        ns = WowStubs.load()
+        WowStubs.login()
+        QuestObjectiveTracker:UpdateSingle({ GetID = function() return 214 end })
+        local text = b.usedLines[1].Text
+        assert.are.equal("Grab 10 Red Silk Bandana (3/10)", text:GetText())
+
+        ns.Core.ToggleOriginal() -- "Monke don't": Blizzard's own line, byte for byte
+        assert.are.equal("3/10 Red Silk Bandana", text:GetText())
+        ns.Core.ToggleOriginal()
+        assert.are.equal("Grab 10 Red Silk Bandana (3/10)", text:GetText())
+        ns.Core.Set("tracker", false)
+        assert.are.equal("3/10 Red Silk Bandana", text:GetText())
+        ns.Core.Set("tracker", true)
+        assert.are.equal("Grab 10 Red Silk Bandana (3/10)", text:GetText())
+
+        -- Blizzard redrew the line since (a loot): that text is left alone.
+        text:SetText("4/10 Red Silk Bandana")
+        ns.Core.ToggleOriginal()
+        assert.are.equal("4/10 Red Silk Bandana", text:GetText())
     end)
 
     it("does nothing on a client without the modern tracker", function()

@@ -32,7 +32,7 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
 - Web fetchers run only when named in `--sources`, never from tests or CI. There is no Wowhead
   fetcher on purpose (its terms forbid scraping).
 - Never make a real LLM API call from tests. Providers are exercised with fakes.
-- The game cannot be run from here. Anything in `Display.lua`, `Tracker.lua`, `Now.lua` or `Arrow.lua` needs a
+- The game cannot be run from here. Anything in `Display.lua`, `Tracker.lua`, `Now.lua`, `Arrow.lua` or `List.lua` needs a
   line in `docs/INGAME_CHECKLIST.md` for the human to check. Check Blizzard behaviour against the
   real Forever UI source: branch `forever` of https://github.com/Gethe/wow-ui-source.
 - Never call Blizzard's map or tracker functions from addon code (taint); reading their frames
@@ -64,7 +64,8 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
   `Compose` (pure: inputs to the text that is shown), `Core` (settings, slash commands),
   `Display` (quest frame hooks), `Tracker` (tracker lines), `Pick` (Monke pick: rank the log,
   super-track one), `Arrow` (which way to turn: the quest's waypoint or map marker against the
-  player's map position and facing), `Now` (the Now line frame). `Bindings.xml` is loaded by the
+  player's map position and facing), `Now` (the Now line frame), `List` (the Monke Do list:
+  every quest's next step, nearest first; click to super-track). `Bindings.xml` is loaded by the
   client itself.
 - `tools/make_media.py` rebuilds the 64x64 icons from the source art, cuts out the Now line's
   monke finger ("Monke finger.png") and draws its gold arrow (with no folder it draws only the

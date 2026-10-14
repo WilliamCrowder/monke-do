@@ -145,8 +145,33 @@ local function playSound()
     end
 end
 
+-- Super-track one quest (0: none), with the short select sound. Monke pick and a click on the
+-- Monke Do list both come through here.
+function Pick.Track(questID)
+    Pick.lastPicked = questID
+    local Now = ns.Now
+    local nowUp = Now ~= nil and Now.IsActive()
+    if nowUp then
+        Now.ClearMessage()
+    end
+    if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
+        C_SuperTrack.SetSuperTrackedQuestID(questID) -- the Now line follows the event; 0 clears
+    end
+    playSound()
+    if nowUp then
+        -- Also when no SUPER_TRACKING_CHANGED is coming: no C_SuperTrack, or the same quest
+        -- again. An unchanged line costs nothing to redraw.
+        Now.Refresh()
+    end
+    if ns.List then
+        ns.List.Refresh()
+    end
+end
+
 -- Monke pick. Super-tracks the best quest, or the one after the quest already
--- super-tracked. Returns the chosen quest ID, or nil when there is nothing to pick.
+-- super-tracked. After the last one it tracks nothing (Blizzard's arrow and the Now line go
+-- quiet), and the click after that starts from the best quest again. Returns the chosen quest
+-- ID, 0 for "nothing", or nil when there is nothing to pick.
 function Pick.Next()
     local voice = Core.Get("voice")
     local Now = ns.Now
@@ -164,24 +189,16 @@ function Pick.Next()
     local choice = ranked[1]
     for position, candidate in ipairs(ranked) do
         if candidate.questID == current then
-            choice = ranked[position % #ranked + 1]
+            choice = ranked[position + 1] -- nil after the last: track nothing
             break
         end
     end
-
-    Pick.lastPicked = choice.questID
+    local questID = choice and choice.questID or 0
+    Pick.Track(questID)
     if nowUp then
-        Now.ClearMessage()
-    end
-    if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
-        C_SuperTrack.SetSuperTrackedQuestID(choice.questID) -- the Now line follows the event
-    end
-    playSound()
-
-    if nowUp then
-        -- Also when no SUPER_TRACKING_CHANGED is coming: no C_SuperTrack, or the same quest
-        -- again. An unchanged line costs nothing to redraw.
-        Now.Refresh()
+        return questID
+    elseif not choice then
+        Core.Print(Voice.Get("pick_cleared", voice))
     elseif Now then
         -- The Now line is off: one chat line says what was picked and what to do there.
         Core.Print(Voice.Format("pick_chat", voice, {
@@ -189,5 +206,5 @@ function Pick.Next()
             task = Now.Describe(choice.questID, voice),
         }))
     end
-    return choice.questID
+    return questID
 end

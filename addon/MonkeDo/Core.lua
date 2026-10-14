@@ -17,6 +17,7 @@ Core.DEFAULTS = {
     nowLine = true,
     goldArrow = false, -- the Now line points with the monke finger unless this is on
     sounds = true,     -- "OK, monke do" / "Monke don't" when the original-text toggle flips
+    monkeList = false, -- the Monke Do list: every quest's next step, nearest first
     minimap = { hide = false },
 }
 
@@ -191,6 +192,7 @@ function Core.PrintHelp()
     print("  /monke pick - which quest now? Again: the next one. A key for it: Keybindings, AddOns")
     print("  /monke now on||off||reset - the Now line at the bottom middle of the screen")
     print("  /monke pointer finger||arrow - the monke finger or a gold arrow points the way")
+    print("  /monke list on||off||reset - the Monke Do list: every quest's next step, nearest first")
     print("  /monke sound on||off - \"OK, monke do\" and \"Monke don't\" when the text swaps or a quest is taken")
     print("  /monke version")
 end
@@ -256,6 +258,16 @@ function Core.HandleSlash(message)
             Core.Set("goldArrow", not Core.Get("goldArrow"))
         end
         Core.Print("pointer: " .. (Core.Get("goldArrow") and "gold arrow" or "monke finger"))
+    elseif command == "list" then
+        if rest == "reset" then
+            if ns.List then
+                ns.List.ResetPosition()
+            end
+            Core.Print("Monke Do list: back in its first spot")
+            return
+        end
+        Core.Set("monkeList", parseSwitch(rest, Core.Get("monkeList")))
+        Core.Print("Monke Do list: " .. onOff(Core.Get("monkeList")))
     elseif command == "sound" or command == "sounds" then
         Core.Set("sounds", parseSwitch(rest, Core.Get("sounds")))
         Core.Print("sounds: " .. onOff(Core.Get("sounds")))
@@ -303,6 +315,9 @@ local function buildSettingsPanel()
         .. "screen. Drag it anywhere. Click it for Monke pick. A key for Monke pick: Keybindings, AddOns.")
     Settings.CreateCheckbox(category, register("goldArrow", "boolean", "Gold arrow"),
         "On the Now line, point the way with a gold arrow instead of the monke finger.")
+    Settings.CreateCheckbox(category, register("monkeList", "boolean", "Monke Do list"),
+        "A list of every quest's next step, nearest first. Click a line to track that quest. "
+        .. "Drag its title to move it.")
     Settings.CreateCheckbox(category, register("sounds", "boolean", "Sounds"),
         "Say \"OK, monke do\" or \"Monke don't\" when you swap between Monke Do and the original text, "
         .. "and \"OK, monke do\" when you accept a quest.")
@@ -378,6 +393,9 @@ function Core.OnLogin()
     end
     if ns.Now then
         ns.Now.Enable()
+    end
+    if ns.List then
+        ns.List.Enable()
     end
     Core.Print("loaded. /monke for voice and options.")
 end

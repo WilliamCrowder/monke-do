@@ -179,10 +179,10 @@ local function withDistance(step, questID, voice, colour)
 end
 
 -- "Take 7 more Red Silk Bandana off bad men · 120 yd". Monke pick uses this for its chat line
--- when the Now line is off.
-function Now.Describe(questID, voice)
+-- when the Now line is off; the Monke Do list asks for the distance in grey.
+function Now.Describe(questID, voice, greyDistance)
     voice = voice or Core.Get("voice")
-    return withDistance(Now.NextStep(questID, voice), questID, voice)
+    return withDistance(Now.NextStep(questID, voice), questID, voice, greyDistance and DISTANCE_COLOUR or nil)
 end
 
 -- The quest the line is about: the super-tracked quest, when it is in the quest log.
@@ -512,20 +512,8 @@ local function fill(child, parent)
     child:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
 end
 
-local function createFrame()
-    if not (CreateFrame and UIParent) then
-        return nil
-    end
-    local f = CreateFrame("Button", "MonkeDoNowFrame", UIParent)
-    f:SetWidth(PAD * 2 + ICON_SIZE)
-    f:SetHeight(MIN_HEIGHT)
-    f:SetFrameStrata("LOW")
-    f:SetClampedToScreen(true)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForClicks("LeftButtonUp")
-    f:RegisterForDrag("LeftButton")
-
+-- The dark strip with a gold hairline round it. The Monke Do list wears the same.
+function Now.Dress(f)
     local background = f:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints()
     background:SetColorTexture(0, 0, 0, BACKGROUND_ALPHA)
@@ -543,6 +531,22 @@ local function createFrame()
         edge:SetColorTexture(EDGE_COLOUR[1], EDGE_COLOUR[2], EDGE_COLOUR[3], EDGE_COLOUR[4])
         f.monkeEdges[#f.monkeEdges + 1] = edge
     end
+end
+
+local function createFrame()
+    if not (CreateFrame and UIParent) then
+        return nil
+    end
+    local f = CreateFrame("Button", "MonkeDoNowFrame", UIParent)
+    f:SetWidth(PAD * 2 + ICON_SIZE)
+    f:SetHeight(MIN_HEIGHT)
+    f:SetFrameStrata("LOW")
+    f:SetClampedToScreen(true)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForClicks("LeftButtonUp")
+    f:RegisterForDrag("LeftButton")
+    Now.Dress(f)
 
     -- Layers: the dark background, then the glow for the resume cue, then the icon and the text
     -- on their own frame so the glow never covers the words. Neither child takes the mouse.

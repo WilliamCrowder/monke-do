@@ -26,6 +26,8 @@ Monke get: 875 XP, 4s
 - **Monke pick**: "which quest now?" in one key. It picks a quest you can hand in, otherwise the
   nearest one, and points the game's own arrow at it. Press again for another. Set the key in
   Options > Keybindings > AddOns, or click the Now line, or type `/monke pick`.
+- **The Monke Do list** (`/monke list on`): like a honey-do list, every quest's next step and
+  how far away it is, nearest first, re-sorted as you walk. Click a line to follow that quest.
 
 `/monke` opens the settings. `/monke help` lists the commands. `/monke now off` hides the Now
 line; `/monke now reset` puts it back at the bottom middle.

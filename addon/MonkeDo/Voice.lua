@@ -53,6 +53,11 @@ local STRINGS = {
         now_tip_drag = "Drag: move line.",
         pick_none = "No quest. Monke go find quest giver.",
         pick_chat = "Monke pick: {title} \226\128\148 {task}",
+        pick_cleared = "Monke pick: nothing. Monke rest.",
+        list_title = "Monke Do list",
+        list_more = "+{n} more",
+        list_tip_click = "Click: Monke do this one.",
+        list_tip_drag = "Drag: move list.",
     },
     plain = {
         monster = "Kill {n} {name}.",
@@ -92,6 +97,11 @@ local STRINGS = {
         now_tip_drag = "Drag: move this line.",
         pick_none = "No quests to pick. Find a quest giver.",
         pick_chat = "Picked: {title} \226\128\148 {task}",
+        pick_cleared = "Picked: nothing. No quest is tracked.",
+        list_title = "Quest to-do list",
+        list_more = "+{n} more",
+        list_tip_click = "Click: track this quest.",
+        list_tip_drag = "Drag: move this list.",
     },
 }
 

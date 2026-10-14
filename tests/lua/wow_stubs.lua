@@ -224,6 +224,9 @@ local function newFrame(frameType, name, parent, template)
         function texture:IsShown()
             return self.shown
         end
+        function texture:SetShown(show)
+            self.shown = show and true or false
+        end
         return texture
     end
     function frame:CreateFontString()
@@ -395,7 +398,7 @@ local OWNED = {
     -- Now line and Monke pick
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
     "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails", "PlaySoundFile",
-    "MonkeDo_Pick", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame",
+    "MonkeDo_Pick", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame", "MonkeDoListFrame",
     -- the Now line's arrow
     "C_Map", "GetPlayerFacing", "GetQuestUiMapID", "CreateVector2D",
 }

@@ -80,8 +80,13 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 ## Tracker
 
 10. Tracked quests show "Grab 10 Red Silk Bandana (3/10)" style lines. No line overlaps the one
-    below it. `/monke tracker off` restores Blizzard's lines after the next tracker update.
+    below it. `/monke tracker off` and "Monke don't" put Blizzard's lines back at once, and
+    `/monke tracker on` and "OK, monke do" bring the Monke lines back at once.
 11. Use a quest item button in the tracker during combat: no "action blocked" taint error.
+    - Flip "Monke do" / "Monke don't" a few times and change a setting or two, then level up,
+      open and close Edit Mode, and change the UI scale. No "Lua Taint: MonkeDo" error, in
+      particular not "GetAuraDataByIndex(): Auras cannot be accessed when secret while tainted
+      by 'MonkeDo'" from EditModeManager (the tracker's MarkDirty, now gone, used to cause it).
 
 ## Settings
 
@@ -123,7 +128,9 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 22. Options > Keybindings > AddOns lists "Monke Do: which quest now?" (there is no separate
     "Monke Do" heading: the game draws headings there as blank rows). Bind a key and press it:
     Blizzard's arrow and map pin point at the picked quest (one ready to hand in first, else the
-    nearest), with a short click. Press again: the next quest; after the last it wraps.
+    nearest), with a short click. Press again: the next quest. After the last one a press tracks
+    nothing: Blizzard's arrow and map pin go away and the line reads "Nothing now"; the next
+    press starts again from the best quest.
     `/monke pick` and a left-click on the line do the same, also in combat. A picked quest you
     are not watching stays off Blizzard's tracker (Monke Do does not add watches, to keep the
     tracker untainted); the strip still shows it.
@@ -169,3 +176,18 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
     Forever quests): the monke icon.
 34. A few minutes of questing with the pointer turning: no frame-rate drop. It turns 25 times a
     second, and only while the line shows a quest.
+
+## The Monke Do list
+
+35. `/monke list on` (or the "Monke Do list" checkbox): a dark panel with a gold edge appears at
+    the left edge of the screen, above the middle, titled "Monke Do list", clear of the chat box,
+    the unit frames and the objective tracker. One line per quest in the log: its next step and
+    the distance in grey, nearest first; quests with no distance (another continent, a dungeon)
+    last. Walk toward a quest further down: within a few seconds it climbs the list.
+36. Hover a line: the tooltip shows the quest title and the whole step. The list does not
+    reorder while the mouse is over it. Click a line: that quest gets the monke icon and gold
+    text, the Now line and its finger switch to it, and Blizzard's arrow points at it, with the
+    short select sound. No map opens and nothing is blocked, also in combat.
+37. With more than ten quests the last line reads "+N more". Turning in or abandoning quests
+    shrinks the panel; with no quests it hides. Drag the title: it moves, stays on screen, and
+    `/monke list reset` puts it back. It fades during a fight and hides with "Monke don't".

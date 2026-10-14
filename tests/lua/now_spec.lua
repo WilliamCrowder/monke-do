@@ -319,7 +319,11 @@ describe("Now line", function()
             track(214)
             Now.Say("Hello")
             assert.are.equal("Hello", line())
-            WowStubs.click(frame, "LeftButton") -- the only quest again: no event from the game
+            WowStubs.click(frame, "LeftButton") -- past the only quest: track nothing
+            assert.are.equal(0, WowStubs.superTracked)
+            assert.are.equal(INVITE, line())
+            Now.Say("Hello")
+            WowStubs.click(frame, "LeftButton") -- and back to it
             assert.are.equal(at(TAKE, "120 yd"), line())
             WowStubs.log = {}
             WowStubs.click(frame, "LeftButton") -- nothing left to pick
@@ -434,7 +438,8 @@ describe("Now line", function()
             assert.are.equal(0, activeTickers())
             assert.is_false(Now.IsActive())
             WowStubs.printed = {}
-            ns.Pick.Next() -- the key still picks; the answer goes to chat
+            WowStubs.superTracked = 0
+            assert.are.equal(214, ns.Pick.Next()) -- the key still picks; the answer goes to chat
             assert.are.equal(1, #WowStubs.printed)
             WowStubs.fire("QUEST_LOG_UPDATE")
             WowStubs.advance(2)
@@ -598,7 +603,8 @@ describe("Now line", function()
                 frame.scripts.OnLeave(frame)
                 frame.scripts.OnDragStart(frame)
                 frame.scripts.OnDragStop(frame)
-                WowStubs.click(frame, "LeftButton")
+                WowStubs.click(frame, "LeftButton") -- after the only quest: nothing
+                WowStubs.click(frame, "LeftButton") -- and back to it
                 WowStubs.fire("PLAYER_ENTERING_WORLD")
                 WowStubs.fire("PLAYER_REGEN_DISABLED")
                 WowStubs.fire("PLAYER_REGEN_ENABLED")
