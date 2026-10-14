@@ -92,11 +92,26 @@ sample to `pipeline/out/review.md`. Every LLM call is cached, so a re-run costs 
 - `--provider batch` writes lore with Claude through the Message Batches API. It needs
   `ANTHROPIC_API_KEY` in your environment and `uv sync --extra llm`.
 - `--provider file --summaries-file FILE.jsonl` imports summaries written elsewhere.
-- `--sources questie,wago` is the default. Web sources such as `wowforevertalents` run only
-  when named here, only from your machine, never in CI. Ask the site owner before the first run.
+- `--sources questie_forever,wago` is the default. `questie_forever` reads the pinned
+  QuestieDB Forever release; `--questie-release vX.Y.Z` tries another one. Web sources such
+  as `wowforevertalents` run only when named here, only from your machine, never in CI. Ask the
+  site owner before the first run.
 - `--offline` uses the cached raw files and touches no network.
 
-Hand-pinned summaries live in `pipeline/llm/overrides.jsonl` and always win over the LLM.
+Every summary written so far is committed in `pipeline/llm/summaries/*.jsonl` and applied on
+every run, so a fresh clone exports the same lore without spending anything. A summary whose
+quest changed fails validation and is written again. Hand-pinned summaries live in
+`pipeline/llm/overrides.jsonl` and always win over the LLM.
+
+### Updating from a new QuestieDB release
+
+1. Bump `RELEASE` in `pipeline/sources/questie_forever.py` (and `DEFAULT_BUILD` in
+   `pipeline/sources/wago.py` for a new game build).
+2. `uv run python -m pipeline run`: loads the release, applies the committed summaries, exports.
+3. `uv run python -m pipeline requests --chunk-size 120` for the new quests and
+   `requests --rejected` for the changed ones; have them written, `check` them, and add the
+   files to `pipeline/llm/summaries/`.
+4. `uv run python -m pipeline run` again, then commit the summaries and the Data files.
 
 Never edit `addon/MonkeDo/Data/*.lua` by hand; `pipeline/export.py` is the only writer.
 

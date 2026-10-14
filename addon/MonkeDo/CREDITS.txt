@@ -11,7 +11,9 @@ Data/MonkeDB.lua is derived in part from the Questie database:
   https://github.com/Questie/QuestieDB
 published under the GNU GPL v3 by the Questie project and its contributors.
 Monke Do takes quest titles, objective sentences, target names and turn-in names from it,
-and adds its own summaries and task lines. The generated file states the build and date it
-was made. The pipeline that makes it is in the Monke Do repository.
+and adds its own summaries and task lines. The quests new in WoW: Forever come from QuestieDB's
+published Forever release, which QuestieDB built from its own Forever import, player traces and
+corrections. The generated file states the build and date it was made. The pipeline that makes
+it is in the Monke Do repository.
 
 World of Warcraft and its quest text are the property of Blizzard Entertainment.

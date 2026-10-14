@@ -205,7 +205,7 @@ describe("Now line arrow", function()
         local FINGER = "Interface\\AddOns\\MonkeDo\\Media\\finger.png"
         local ARROW = "Interface\\AddOns\\MonkeDo\\Media\\arrow.png"
         assert.are.equal(FINGER, frame.monkePointer.path)
-        assert.are.same({ 26, 26 }, frame.monkePointer.size)
+        assert.are.same({ 32, 32 }, frame.monkePointer.size)
         SlashCmdList["MONKEDO"]("pointer arrow")
         assert.are.equal(ARROW, frame.monkePointer.path)
         assert.are.same({ 20, 20 }, frame.monkePointer.size)

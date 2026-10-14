@@ -7,7 +7,7 @@ from pipeline.sources import wago
 
 FIXTURES = Path(__file__).parent / "fixtures" / "wago"
 NOT_FOUND = wago.Reply(404, '{"errors":"Table not found."}')  # what wago really sends
-FOREVER = "1.60.1.69913"
+FOREVER = wago.DEFAULT_BUILD
 ERA = "1.15.8.63829"
 
 

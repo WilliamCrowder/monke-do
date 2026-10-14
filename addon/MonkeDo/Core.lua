@@ -16,8 +16,15 @@ Core.DEFAULTS = {
     tracker = true,
     nowLine = true,
     goldArrow = false, -- the Now line points with the monke finger unless this is on
+    sounds = true,     -- "OK, monke do" / "Monke don't" when the original-text toggle flips
     minimap = { hide = false },
 }
+
+local MEDIA = "Interface\\AddOns\\MonkeDo\\Media\\"
+local SOUND_MONKE_ON = MEDIA .. "monke_do.ogg"
+local SOUND_MONKE_OFF = MEDIA .. "monke_dont.ogg"
+local ORIGINAL_TINT = 0.4 -- the minimap banana, dimmed while the original text shows
+local ACCEPT_GAP = 3       -- seconds: one "monke do" for a burst of accepts (a chain, a share)
 
 -- Per-session on purpose (see the header note). showOriginal is the lore toggle.
 ns.state = { showOriginal = false }
@@ -91,10 +98,65 @@ function Core.GetRecord(questID)
     return db[questID]
 end
 
+-- The voice line for the state just switched to. A client that cannot play the file (none
+-- shipped yet, or no PlaySoundFile) gets the settings checkbox click instead.
+local function playToggleSound(original)
+    if not Core.Get("sounds") then
+        return
+    end
+    local played = PlaySoundFile and PlaySoundFile(original and SOUND_MONKE_OFF or SOUND_MONKE_ON, "SFX")
+    if not played and PlaySound and SOUNDKIT then
+        local kit = original and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
+        if kit then
+            PlaySound(kit)
+        end
+    end
+end
+
+-- The minimap banana shows which text is on: full colour for Monke Do, dimmed for the original.
+-- LibDBIcon redraws the button when these LibDataBroker attributes change.
+function Core.UpdateMinimap()
+    local object = Core.minimapObject
+    if not object then
+        return
+    end
+    local tint = ns.state.showOriginal and ORIGINAL_TINT or 1
+    object.iconR, object.iconG, object.iconB = tint, tint, tint
+end
+
 function Core.ToggleOriginal()
     ns.state.showOriginal = not ns.state.showOriginal
     Core.NotifyChanged()
+    Core.UpdateMinimap()
+    playToggleSound(ns.state.showOriginal)
     return ns.state.showOriginal
+end
+
+-- Accepting a quest while Monke Do text is on: "OK, monke do". Not for the area tasks, world
+-- quests and bounties the client also reports as accepted, and once per burst. Blizzard's own
+-- accept sound still plays, so there is no fallback click here.
+local lastAcceptSound
+function Core.OnQuestAccepted(questID)
+    if ns.state.showOriginal or not Core.Get("sounds") or type(questID) ~= "number" then
+        return
+    end
+    local log = C_QuestLog
+    if log and ((log.IsQuestTask and log.IsQuestTask(questID)) or (log.IsWorldQuest and log.IsWorldQuest(questID))
+            or (log.IsQuestBounty and log.IsQuestBounty(questID))) then
+        return
+    end
+    local now = GetTime and GetTime() or 0
+    if lastAcceptSound and now - lastAcceptSound < ACCEPT_GAP then
+        return
+    end
+    lastAcceptSound = now
+    if PlaySoundFile then
+        PlaySoundFile(SOUND_MONKE_ON, "SFX")
+    end
+end
+
+function Core.OriginalStateText(original)
+    return original and "showing the original quest text" or "showing Monke Do text"
 end
 
 function Core.VersionText()
@@ -129,6 +191,7 @@ function Core.PrintHelp()
     print("  /monke pick - which quest now? Again: the next one. A key for it: Keybindings, AddOns")
     print("  /monke now on||off||reset - the Now line at the bottom middle of the screen")
     print("  /monke pointer finger||arrow - the monke finger or a gold arrow points the way")
+    print("  /monke sound on||off - \"OK, monke do\" and \"Monke don't\" when the text swaps or a quest is taken")
     print("  /monke version")
 end
 
@@ -150,8 +213,7 @@ function Core.HandleSlash(message)
     if command == "" then
         Core.OpenSettings()
     elseif command == "lore" then
-        local original = Core.ToggleOriginal()
-        Core.Print(original and "showing the original quest text" or "showing Monke Do text")
+        Core.Print(Core.OriginalStateText(Core.ToggleOriginal()))
     elseif command == "voice" then
         if Voice.IsVoice(rest) then
             Core.Set("voice", rest)
@@ -194,6 +256,9 @@ function Core.HandleSlash(message)
             Core.Set("goldArrow", not Core.Get("goldArrow"))
         end
         Core.Print("pointer: " .. (Core.Get("goldArrow") and "gold arrow" or "monke finger"))
+    elseif command == "sound" or command == "sounds" then
+        Core.Set("sounds", parseSwitch(rest, Core.Get("sounds")))
+        Core.Print("sounds: " .. onOff(Core.Get("sounds")))
     elseif command == "version" then
         Core.Print(Core.VersionText())
     else
@@ -238,6 +303,9 @@ local function buildSettingsPanel()
         .. "screen. Drag it anywhere. Click it for Monke pick. A key for Monke pick: Keybindings, AddOns.")
     Settings.CreateCheckbox(category, register("goldArrow", "boolean", "Gold arrow"),
         "On the Now line, point the way with a gold arrow instead of the monke finger.")
+    Settings.CreateCheckbox(category, register("sounds", "boolean", "Sounds"),
+        "Say \"OK, monke do\" or \"Monke don't\" when you swap between Monke Do and the original text, "
+        .. "and \"OK, monke do\" when you accept a quest.")
 
     Settings.RegisterAddOnCategory(category)
     Core.categoryID = category:GetID()
@@ -260,16 +328,24 @@ local function buildMinimapButton()
             if button == "RightButton" then
                 Core.OpenSettings()
             else
-                Core.ToggleOriginal()
+                Core.Print(Core.OriginalStateText(Core.ToggleOriginal()))
             end
         end,
         OnTooltipShow = function(tooltip)
             tooltip:AddLine("Monke Do")
-            tooltip:AddLine("Click: swap Monke Do and original text", 1, 1, 1)
+            if ns.state.showOriginal then
+                tooltip:AddLine("Showing: the original quest text", 0.7, 0.7, 0.7)
+                tooltip:AddLine("Click: Monke Do text", 1, 1, 1)
+            else
+                tooltip:AddLine("Showing: Monke Do text", 1, 0.82, 0)
+                tooltip:AddLine("Click: the original quest text", 1, 1, 1)
+            end
             tooltip:AddLine("Right-click: settings", 1, 1, 1)
         end,
     })
     if object then
+        Core.minimapObject = object
+        Core.UpdateMinimap()
         icon:Register("MonkeDo", object, ns.settings.minimap)
     end
 end
@@ -313,12 +389,15 @@ SlashCmdList["MONKEDO"] = Core.HandleSlash
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
-frame:SetScript("OnEvent", function(_, event, name)
+pcall(frame.RegisterEvent, frame, "QUEST_ACCEPTED") -- a build without it only loses the sound
+frame:SetScript("OnEvent", function(_, event, arg)
     if event == "ADDON_LOADED" then
-        if name == ADDON_NAME then
+        if arg == ADDON_NAME then
             Core.InitSettings()
         end
     elseif event == "PLAYER_LOGIN" then
         Core.OnLogin()
+    elseif event == "QUEST_ACCEPTED" then
+        Core.OnQuestAccepted(arg)
     end
 end)

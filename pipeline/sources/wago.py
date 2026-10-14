@@ -15,6 +15,9 @@ What a real run found on 2026-09-21 (this corrects the older note in the data co
   JSON body `{"errors":"Table not found."}`. Classic Era has no `QuestObjective` either.
 - A build wago does not know at all answers HTTP 404 with an HTML page.
 
+Checked again on 2026-10-13: build 1.60.1.70338 has 6,610 IDs, 1,752 of them at 90000 or above,
+and still no `QuestObjective` or `QuestV2CliTask` (now HTTP 400 with the same JSON body).
+
 All of these count as "table absent". When `QuestV2` is absent for the requested build,
 the ID list of the newest `fallback_product` build is used instead and a note says so.
 The build is a parameter, so nothing here changes when wago gains more Forever tables.
@@ -39,7 +42,7 @@ PRIORITY = 3
 NEEDS_NETWORK = True
 OPTIONS: tuple[str, ...] = ("build", "fallback_product")
 
-DEFAULT_BUILD = "1.60.1.69913"
+DEFAULT_BUILD = "1.60.1.70338"
 DEFAULT_FALLBACK_PRODUCT = "wow_classic_era"
 BASE_URL = "https://wago.tools"
 USER_AGENT = "MonkeDoPipeline/0.1"

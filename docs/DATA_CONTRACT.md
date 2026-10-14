@@ -290,6 +290,19 @@ These correct assumptions in the build plan. Workers rely on these, not the plan
   reaches the addon. Specs write through `_G.`; `tests/lua/mini_busted.lua` does
   the same so the local runner catches it.
 - `FontString:GetText()` returns nil for an empty string on the real client.
+- Checked on 2026-10-13: the Forever quests are NOT in QuestieDB's `data/Classic` or
+  `data/Forever` source files on master (`data/Forever` holds the same 4,244 vanilla quests
+  and sentences as Classic, differing only in race masks). They live in correction files on
+  QuestieDB's Forever branches and are folded into the built `QuestieDB-Forever.zip` attached
+  to every QuestieDB release, which is what Questie in the Forever client loads. v1.0.6
+  (2026-10-12) holds 5,226 quests, 870 of them at 90000 or above, 836 of those with an
+  objectives sentence. Per QuestieDB's `docs/forever-delta-base.md`, most new quests come
+  from an offline import of Wowhead's Forever pages, then player traces and hand corrections.
+  `questie_forever` reads that release (pinned, `RELEASE`) and is the default Questie source;
+  `questie` (Classic master) is kept but no longer runs by default. The release stores each
+  value as base64 CBOR in the TOC's `## X-` metadata lines (see the module docstring). It
+  drops the objectives sentence of 57 vanilla quests that Classic has (Stranglethorn Fever,
+  some class quests); those export rule-based tasks.
 - Questie's `startedBy`/`finishedBy` tell a delivery quest from a return trip:
   1,796 of 4,244 vanilla quests are handed in to someone other than the giver
   (1,591) or to an object (205).

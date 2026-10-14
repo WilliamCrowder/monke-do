@@ -368,7 +368,7 @@ def _spell_drafts(entries: object) -> list[_Draft]:
 
 def build_objectives(
     quest_id: int, field: object, objectives_text: str | None, names: Names,
-    trigger_end: object = None,
+    trigger_end: object = None, source: str = SOURCE,
 ) -> list[db.Objective]:
     """Questie's `objectives` and `triggerEnd` fields -> contract objectives, numbered from 1.
 
@@ -397,7 +397,7 @@ def build_objectives(
         objectives.append(db.Objective(
             quest_id=quest_id, idx=idx, type=draft.type, target_id=draft.target_id,
             target_name=draft.target_name, amount=amount or 1,
-            amount_source="text" if amount else "default", text=draft.text, source=SOURCE,
+            amount_source="text" if amount else "default", text=draft.text, source=source,
         ))
     return objectives
 
@@ -469,33 +469,8 @@ def load(
         if not isinstance(quest_id, int) or not isinstance(row, dict):
             continue
         quest_ids.append(quest_id)
-        title = row.get(keys["name"])
-        title = canonical_tokens(title) if isinstance(title, str) and title.strip() else None
-        objectives_text = _joined_text(row.get(keys["objectivesText"]))
-        db.upsert_meta(
-            conn, quest_id, SOURCE,
-            level=_int_or_none(row.get(keys["questLevel"])),
-            required_level=_int_or_none(row.get(keys["requiredLevel"])),
-            flags=_int_or_none(row.get(keys["questFlags"])),
-        )
-        if title is None and objectives_text is None:
+        if not write_quest(conn, result, quest_id, row, keys, names, fetched_at, SOURCE):
             without_text += 1
-            continue
-        turnin_npc, turnin_kind = turnin(row.get(keys["finishedBy"]), row.get(keys["startedBy"]), names)
-        quest_row = db.QuestRow(
-            id=quest_id, source=SOURCE, title=title, objectives_text=objectives_text,
-            turnin_npc=turnin_npc, turnin_kind=turnin_kind, fetched_at=fetched_at,
-        )
-        if db.upsert_source_row(conn, quest_row):
-            result.rows_written += 1
-        else:
-            result.rows_skipped += 1
-        trigger_end = row.get(keys["triggerEnd"]) if "triggerEnd" in keys else None
-        objectives = build_objectives(
-            quest_id, row.get(keys["objectives"]), objectives_text, names, trigger_end)
-        if objectives:
-            db.replace_objectives(conn, quest_id, objectives)
-            result.objectives_written += len(objectives)
 
     result.known_ids = db.add_known_ids(conn, quest_ids, KNOWN_IDS_BUILD)
     result.notes.append(
@@ -505,3 +480,39 @@ def load(
     if without_text:
         result.notes.append(f"{without_text} quests have neither a title nor objectives text; no row written")
     return result
+
+
+def write_quest(
+    conn: sqlite3.Connection, result: db.SourceResult, quest_id: int, row: dict, keys: dict[str, int],
+    names: Names, fetched_at: str, source: str,
+) -> bool:
+    """One Questie quest row (field index -> parsed Lua value) into meta, source_rows and
+    objectives. Shared with `questie_forever`, whose release holds the same fields. Returns
+    False when the quest has neither a title nor an objectives sentence (meta only)."""
+    title = row.get(keys["name"])
+    title = canonical_tokens(title) if isinstance(title, str) and title.strip() else None
+    objectives_text = _joined_text(row.get(keys["objectivesText"]))
+    db.upsert_meta(
+        conn, quest_id, source,
+        level=_int_or_none(row.get(keys["questLevel"])),
+        required_level=_int_or_none(row.get(keys["requiredLevel"])),
+        flags=_int_or_none(row.get(keys["questFlags"])),
+    )
+    if title is None and objectives_text is None:
+        return False
+    turnin_npc, turnin_kind = turnin(row.get(keys["finishedBy"]), row.get(keys["startedBy"]), names)
+    quest_row = db.QuestRow(
+        id=quest_id, source=source, title=title, objectives_text=objectives_text,
+        turnin_npc=turnin_npc, turnin_kind=turnin_kind, fetched_at=fetched_at,
+    )
+    if db.upsert_source_row(conn, quest_row):
+        result.rows_written += 1
+    else:
+        result.rows_skipped += 1
+    trigger_end = row.get(keys["triggerEnd"]) if "triggerEnd" in keys else None
+    objectives = build_objectives(
+        quest_id, row.get(keys["objectives"]), objectives_text, names, trigger_end, source)
+    if objectives:
+        db.replace_objectives(conn, quest_id, objectives)
+        result.objectives_written += len(objectives)
+    return True

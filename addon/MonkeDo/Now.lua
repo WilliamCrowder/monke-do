@@ -28,11 +28,13 @@ ns.Now = Now
 local MIN_HEIGHT = 24
 local PAD = 5              -- inside the strip, around the icon and the words
 local ICON_SIZE = 18       -- the icon's slot; the finger hangs a little over it
-local ICON_GAP = 7
+local ICON_GAP = 9         -- room for the turned finger's tip before the words
 local ICON = "Interface\\AddOns\\MonkeDo\\Media\\icon.png"
 local FINGER = "Interface\\AddOns\\MonkeDo\\Media\\finger.png" -- both drawn pointing up
 local ARROW = "Interface\\AddOns\\MonkeDo\\Media\\arrow.png"
-local FINGER_SIZE = 26
+local FINGER_SIZE = 32     -- the picture includes its gold rim, so the hand itself is about 27
+local BACKGROUND_ALPHA = 0.6 -- dark enough that the world behind does not show through the finger
+local EDGE_COLOUR = { 1, 0.82, 0, 0.5 } -- a gold hairline round the strip, the glow's colour
 local ARROW_SIZE = 20
 local ARROW_SECONDS = 0.04 -- the arrow turns 25 times a second while a quest is on the line
 -- The longest the words get before they are cut (the tooltip has them whole). The gamepad
@@ -289,15 +291,21 @@ local function updateTicker()
     end
 end
 
+-- Off with its setting, and while the original-text toggle is on ("Monke don't" means the
+-- stock interface).
+local function wanted()
+    return Core.Get("nowLine") and not ns.state.showOriginal
+end
+
 function Now.IsActive()
-    return frame ~= nil and Core.Get("nowLine") and true or false
+    return frame ~= nil and wanted() and true or false
 end
 
 function Now.Refresh()
     if not frame then
         return
     end
-    if not Core.Get("nowLine") then
+    if not wanted() then
         frame:Hide()
         questShown, stepShown = nil, nil
         updateTicker()
@@ -520,7 +528,21 @@ local function createFrame()
 
     local background = f:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints()
-    background:SetColorTexture(0, 0, 0, 0.45)
+    background:SetColorTexture(0, 0, 0, BACKGROUND_ALPHA)
+    f.monkeEdges = {}
+    for _, side in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true },
+        { "TOPLEFT", "BOTTOMLEFT", false }, { "TOPRIGHT", "BOTTOMRIGHT", false } }) do
+        local edge = f:CreateTexture(nil, "BORDER")
+        edge:SetPoint(side[1], f, side[1], 0, 0)
+        edge:SetPoint(side[2], f, side[2], 0, 0)
+        if side[3] then
+            edge:SetHeight(1)
+        else
+            edge:SetWidth(1)
+        end
+        edge:SetColorTexture(EDGE_COLOUR[1], EDGE_COLOUR[2], EDGE_COLOUR[3], EDGE_COLOUR[4])
+        f.monkeEdges[#f.monkeEdges + 1] = edge
+    end
 
     -- Layers: the dark background, then the glow for the resume cue, then the icon and the text
     -- on their own frame so the glow never covers the words. Neither child takes the mouse.

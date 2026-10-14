@@ -46,6 +46,19 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 5. The toggle button sits in the quest frame header without covering the NPC name or the close
    button, and on the map quest details without covering the back button. Positions are the two
    `createToggle` calls in `Display.lua`.
+   - The minimap banana (left-click) swaps the same way. While the original text shows, the
+     banana is dimmed grey and its tooltip says "Showing: the original quest text"; back on Monke
+     Do it is full colour again. Each click prints one chat line saying which text is on. With
+     `monke_do.ogg` and `monke_dont.ogg` in `Media`, the swap says "OK, monke do" or "Monke
+     don't" at about the loudness of the game's own interface sounds (Sound Effects slider);
+     without them, a checkbox click. `/monke sound off` silences both.
+   - Accept a quest from a quest giver while Monke Do text is on: "OK, monke do" plays over
+     Blizzard's own accept sound. Accepting several in a row (a chain, a shared quest) plays it
+     once. Nothing plays with the original text on, with `/monke sound off`, or when walking into
+     a bonus objective area.
+   - The Now line (the strip with the monke finger) disappears with "Monke don't" and comes back,
+     where it was and with the current step, with "OK, monke do". While it is gone the Monke
+     pick key still works and says its pick in chat.
 6. A long quest (more than one screen of Blizzard text) scrolls correctly after the swap, with no
    empty scroll area left behind, on the detail, progress and reward pages and in the map quest
    details.
@@ -142,7 +155,10 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
     keeps pointing at the quest, the same way as the gold arrow on the edge of the minimap (and
     toward the quest's area with the map open). Walk the way it points: the distance on the line
     goes down. The finger reads at a glance, hangs only a little over the strip and does not
-    touch the words. `/monke pointer arrow` (or the "Gold arrow" checkbox) swaps in a gold arrow
+    touch the words, also when it points straight right at them. It has a pale gold rim and
+    stands out against grass, wood, dirt and snow behind the strip; the strip is dark enough that
+    the ground does not show through, and has a thin gold edge all round. The edge does not
+    flicker or double up at any UI scale. `/monke pointer arrow` (or the "Gold arrow" checkbox) swaps in a gold arrow
     that points the same way; `/monke pointer finger` brings the finger back.
 31. Within about 30 yards of the spot the pointer turns back into the monke icon. Once the quest is
     ready, it points at whoever takes it in.

@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_defaults_never_include_a_web_site():
-    assert sources.DEFAULT_SOURCES == ["questie", "wago"]
+    assert sources.DEFAULT_SOURCES == ["questie_forever", "wago"]
     for name in sources.DEFAULT_SOURCES:
         assert not sources.REGISTRY[name].startswith("pipeline.sources.sites.")
 

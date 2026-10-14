@@ -21,13 +21,16 @@ from pipeline import db
 # run never imports BeautifulSoup and a typo cannot half-import anything.
 REGISTRY: dict[str, str] = {
     "questie": "pipeline.sources.questie",
+    "questie_forever": "pipeline.sources.questie_forever",
     "wago": "pipeline.sources.wago",
     "wowforevertalents": "pipeline.sources.sites.wowforevertalents",
 }
 
 # Web sites are never in the default list: they run only when named explicitly,
-# and only after their owner has been asked.
-DEFAULT_SOURCES = ["questie", "wago"]
+# and only after their owner has been asked. `questie_forever` replaces `questie` here: its
+# release is the Classic data with Forever's corrections and new quests, and running both
+# would let whichever downloaded last win on the shared priority.
+DEFAULT_SOURCES = ["questie_forever", "wago"]
 
 
 def get_module(name: str) -> ModuleType:

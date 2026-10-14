@@ -42,7 +42,11 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
 ## Layout
 
 - `pipeline/db.py` is the schema. Sources write through its helpers only.
-- `pipeline/sources/` one module per source, same `load()` interface.
+- `pipeline/sources/` one module per source, same `load()` interface. `questie_forever` (the
+  pinned QuestieDB Forever release) and `wago` run by default; README has the update steps.
+- `pipeline/llm/summaries/*.jsonl` every summary written so far, applied on every `summarize`.
+  New writers' output goes here once it passes `check`; it is the only copy that survives a
+  fresh clone (the SQLite database and `pipeline/out/` are gitignored).
 - `pipeline/llm/` prompt (`prompts/v1.md`), providers, summarize loop, `overrides.jsonl`
   (hand-pinned summaries that beat the LLM but not the validator).
 - `pipeline/validate.py` decides what ships. `pipeline/export.py` writes the Lua. Cached

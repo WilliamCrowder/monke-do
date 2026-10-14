@@ -4,7 +4,8 @@
     uv run --with pillow python tools/make_media.py        # only the drawn images (the arrow)
 
 The Now line's pointer, a gorilla hand pointing straight up ("Monke finger.png", on a clear
-background), is cut off at the wrist and centred so the game can turn it any way.
+background), is cut off at the wrist, given a pale gold rim and centred so the game can turn
+it any way.
 
 The round emblems come on a black square. WoW draws icons on dark and light backgrounds, so
 the black outside the emblem is made transparent: everything outside the convex hull of the
@@ -40,6 +41,11 @@ SIZE = 64
 ARROW = "arrow.png"
 GOLD = (255, 209, 0, 255)   # Blizzard's gold, 1 / 0.82 / 0
 OUTLINE = (40, 20, 0, 255)  # dark brown, so the arrow reads on grass, snow and stone alike
+# The finger is dark fur, which vanishes on the dark strip and on wood and earth behind it: a
+# pale gold rim (then the arrow's dark edge) gives it a silhouette on any background.
+RIM = (255, 222, 130, 255)
+RIM_WIDTH = 3   # px at 64x64
+EDGE_WIDTH = 1
 
 
 def hull(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -142,7 +148,30 @@ def pointer(image: Image.Image) -> Image.Image:
     side = int(radius * 2.04) + 2
     square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     square.paste(rgba, (round(side / 2 - cx), round(side / 2 - cy)))
-    return square.resize((SIZE, SIZE), Image.LANCZOS)
+    return rimmed(square.resize((SIZE, SIZE), Image.LANCZOS))
+
+
+def rimmed(hand: Image.Image) -> Image.Image:
+    """The 64x64 hand, shrunk to leave room in the square for a RIM ring and a dark edge round it.
+
+    Worked at 4x so the rings come out smooth. The rings stay inside the square's inscribed
+    circle, as the hand did, so a turn still cuts nothing off.
+    """
+    scale = 4
+    margin = RIM_WIDTH + EDGE_WIDTH + 1
+    inner = (SIZE - 2 * margin) * scale
+    canvas = Image.new("RGBA", (SIZE * scale, SIZE * scale), (0, 0, 0, 0))
+    canvas.paste(hand.resize((inner, inner), Image.LANCZOS), (margin * scale, margin * scale))
+    solid = canvas.getchannel("A").point(lambda v: 255 if v > 96 else 0)
+    rim = solid.filter(ImageFilter.MaxFilter(2 * RIM_WIDTH * scale + 1))
+    edge = rim.filter(ImageFilter.MaxFilter(2 * EDGE_WIDTH * scale + 1))
+    out = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    for colour, mask in ((OUTLINE, edge), (RIM, rim)):
+        layer = Image.new("RGBA", canvas.size, colour)
+        layer.putalpha(mask.filter(ImageFilter.GaussianBlur(scale / 2)))
+        out = Image.alpha_composite(out, layer)
+    out = Image.alpha_composite(out, canvas)
+    return out.resize((SIZE, SIZE), Image.LANCZOS)
 
 
 def find(folder: Path, fragment: str) -> Path:

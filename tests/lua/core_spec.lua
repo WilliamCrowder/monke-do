@@ -67,6 +67,72 @@ describe("Core", function()
             SlashCmdList["MONKEDO"]("LORE")
             assert.is_false(ns.state.showOriginal)
         end)
+        it("the toggle says which text it switched to", function()
+            local DO = "Interface\\AddOns\\MonkeDo\\Media\\monke_do.ogg"
+            local DONT = "Interface\\AddOns\\MonkeDo\\Media\\monke_dont.ogg"
+            Core.ToggleOriginal()
+            assert.are.same({ path = DONT, channel = "SFX" }, WowStubs.soundFiles[1])
+            Core.ToggleOriginal()
+            assert.are.equal(DO, WowStubs.soundFiles[2].path)
+            assert.are.same({}, WowStubs.sounds)
+        end)
+        it("the toggle clicks instead when the voice files cannot play, and is quiet with sounds off", function()
+            WowStubs.soundFilesMissing = true
+            Core.ToggleOriginal()
+            Core.ToggleOriginal()
+            assert.are.same({ SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF, SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON },
+                WowStubs.sounds)
+            SlashCmdList["MONKEDO"]("sound off")
+            assert.is_false(Core.Get("sounds"))
+            assert.is_true(printedContains("sounds: off"))
+            Core.ToggleOriginal()
+            assert.are.equal(2, #WowStubs.soundFiles)
+            assert.are.equal(2, #WowStubs.sounds)
+            _G.PlaySoundFile, _G.PlaySound = nil, nil
+            SlashCmdList["MONKEDO"]("sound on")
+            assert.has_no.errors(function() Core.ToggleOriginal() end)
+        end)
+        it("accepting a quest says monke do, once per burst, and only while Monke Do text is on", function()
+            local DO = "Interface\\AddOns\\MonkeDo\\Media\\monke_do.ogg"
+            WowStubs.fire("QUEST_ACCEPTED", 214)
+            assert.are.same({ { path = DO, channel = "SFX" } }, WowStubs.soundFiles)
+            WowStubs.fire("QUEST_ACCEPTED", 215) -- the next quest of a chain, at once
+            assert.are.equal(1, #WowStubs.soundFiles)
+            WowStubs.advance(3)
+            WowStubs.fire("QUEST_ACCEPTED", 216)
+            assert.are.equal(2, #WowStubs.soundFiles)
+
+            WowStubs.advance(5)
+            ns.state.showOriginal = true
+            WowStubs.fire("QUEST_ACCEPTED", 217)
+            ns.state.showOriginal = false
+            SlashCmdList["MONKEDO"]("sound off")
+            WowStubs.fire("QUEST_ACCEPTED", 218)
+            assert.are.equal(2, #WowStubs.soundFiles)
+            assert.are.same({}, WowStubs.sounds) -- Blizzard plays its own accept sound
+        end)
+        it("entering a bonus objective area, a world quest or a bounty is not an accept", function()
+            _G.C_QuestLog.IsQuestTask = function(id) return id == 1 end
+            _G.C_QuestLog.IsWorldQuest = function(id) return id == 2 end
+            _G.C_QuestLog.IsQuestBounty = function(id) return id == 3 end
+            for id = 1, 3 do
+                WowStubs.fire("QUEST_ACCEPTED", id)
+            end
+            WowStubs.fire("QUEST_ACCEPTED", nil)
+            assert.are.equal(0, #WowStubs.soundFiles)
+            WowStubs.fire("QUEST_ACCEPTED", 4)
+            assert.are.equal(1, #WowStubs.soundFiles)
+        end)
+        it("the minimap banana dims while the original text shows", function()
+            Core.minimapObject = {}
+            Core.UpdateMinimap()
+            assert.are.equal(1, Core.minimapObject.iconR)
+            Core.ToggleOriginal()
+            assert.are.same({ 0.4, 0.4, 0.4 },
+                { Core.minimapObject.iconR, Core.minimapObject.iconG, Core.minimapObject.iconB })
+            Core.ToggleOriginal()
+            assert.are.equal(1, Core.minimapObject.iconB)
+        end)
         it("/monke voice sets and flips the voice", function()
             SlashCmdList["MONKEDO"]("voice plain")
             assert.are.equal("plain", Core.Get("voice"))

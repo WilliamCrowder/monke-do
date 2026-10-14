@@ -112,10 +112,18 @@ describe("Now line", function()
             assert.are.equal("Interface\\AddOns\\MonkeDo\\Media\\icon.png", frame.monkeIcon.path)
         end)
 
+        it("is a dark strip with a gold hairline round it", function()
+            assert.are.equal(4, #frame.monkeEdges)
+            for _, edge in ipairs(frame.monkeEdges) do
+                assert.are.same({ 1, 0.82, 0, 0.5 }, edge.color)
+                assert.is_true(edge.height == 1 or edge.width == 1)
+            end
+        end)
+
         it("is as wide as its words, up to a limit, and stays centred", function()
             local words = frame.monkeLine:GetWidth() -- the invitation
             assert.are.equal(6 * #INVITE + 1, words) -- the fake client: 6 px a character
-            assert.are.equal(5 + 18 + 7 + words + 5, frame:GetWidth())
+            assert.are.equal(5 + 18 + 9 + words + 5, frame:GetWidth())
             bandanas()
             track(214) -- the grey colour code takes no room
             assert.are.equal(6 * #(TAKE .. DOT .. "120 yd") + 1, frame.monkeLine:GetWidth())
@@ -413,6 +421,25 @@ describe("Now line", function()
             assert.is_false(frame:IsShown())
             assert.are.equal(0, activeTickers())
             SlashCmdList["MONKEDO"]("now on")
+            assert.is_true(frame:IsShown())
+            assert.are.equal(1, activeTickers())
+            assert.are.equal(at(TAKE, "120 yd"), line())
+        end)
+
+        it("hides while the original text shows, and comes back with Monke Do text", function()
+            bandanas()
+            track(214)
+            ns.Core.ToggleOriginal() -- "Monke don't": the stock interface
+            assert.is_false(frame:IsShown())
+            assert.are.equal(0, activeTickers())
+            assert.is_false(Now.IsActive())
+            WowStubs.printed = {}
+            ns.Pick.Next() -- the key still picks; the answer goes to chat
+            assert.are.equal(1, #WowStubs.printed)
+            WowStubs.fire("QUEST_LOG_UPDATE")
+            WowStubs.advance(2)
+            assert.is_false(frame:IsShown())
+            ns.Core.ToggleOriginal() -- "OK, monke do"
             assert.is_true(frame:IsShown())
             assert.are.equal(1, activeTickers())
             assert.are.equal(at(TAKE, "120 yd"), line())

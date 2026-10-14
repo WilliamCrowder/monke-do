@@ -194,6 +194,12 @@ local function newFrame(frameType, name, parent, template)
         function texture:SetSize(width, height)
             self.size = { width, height }
         end
+        function texture:SetWidth(width)
+            self.width = width
+        end
+        function texture:SetHeight(height)
+            self.height = height
+        end
         function texture:SetPoint() end
         function texture:SetAllPoints() end
         function texture:SetColorTexture(r, g, b, a)
@@ -388,7 +394,7 @@ local OWNED = {
     "WAYPOINT_OBJECTIVE_FORMAT_OPTIONAL",
     -- Now line and Monke pick
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
-    "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails",
+    "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails", "PlaySoundFile",
     "MonkeDo_Pick", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame",
     -- the Now line's arrow
     "C_Map", "GetPlayerFacing", "GetQuestUiMapID", "CreateVector2D",
@@ -409,6 +415,8 @@ function WowStubs.reset()
     WowStubs.timers = {}
     WowStubs.inCombat = false
     WowStubs.sounds = {}
+    WowStubs.soundFiles = {}     -- PlaySoundFile calls: { path, channel }
+    WowStubs.soundFilesMissing = false
     WowStubs.openedQuest = nil  -- last QuestMapFrame_OpenToQuestDetails(questID)
     WowStubs.instantQuestText = false -- the instantQuestText CVar; off means the description fades in
     -- Where the player is: a map, a spot on it (x east, y south, 0..1) and facing (0 north,
@@ -682,7 +690,14 @@ function WowStubs.reset()
     PlaySound = function(kit)
         table.insert(WowStubs.sounds, kit)
     end
-    SOUNDKIT = { IG_QUEST_LIST_SELECT = 875, IG_MAINMENU_OPTION_CHECKBOX_ON = 856 }
+    SOUNDKIT = { IG_QUEST_LIST_SELECT = 875, IG_MAINMENU_OPTION_CHECKBOX_ON = 856,
+        IG_MAINMENU_OPTION_CHECKBOX_OFF = 857 }
+    -- The real client answers willPlay false for a file it cannot find. WowStubs.soundFilesMissing
+    -- plays that case.
+    PlaySoundFile = function(path, channel)
+        table.insert(WowStubs.soundFiles, { path = path, channel = channel })
+        return not WowStubs.soundFilesMissing
+    end
     issecretvalue = function()
         return false
     end
@@ -968,14 +983,17 @@ function WowStubs.installSettings()
 end
 
 -- Load the addon like the client does: TOC order, (addonName, namespace) as varargs.
--- Library and generated data files that are not on disk are skipped, as the client skips them.
+-- Generated data files that are not on disk are skipped, as the client skips them. Libraries are
+-- always skipped: the packager fetches them, and a local copy for testing in game would need the
+-- client's globals (strmatch and the like) that this fake client does not have.
 function WowStubs.load(options)
     options = options or {}
     local ns = {}
     for _, relative in ipairs(tocFiles()) do
         local isData = relative:match("^Data/") ~= nil
+        local isLib = relative:match("^Libs/") ~= nil
         local path = ADDON_DIR .. relative
-        if fileExists(path) and not (isData and not options.withData) then
+        if fileExists(path) and not isLib and not (isData and not options.withData) then
             local chunk = assert(loadfile(path))
             chunk(ADDON, ns)
         end

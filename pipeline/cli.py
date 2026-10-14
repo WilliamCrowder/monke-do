@@ -15,6 +15,7 @@ from pathlib import Path
 from . import coverage, db, export, review
 from .llm import providers, summarize
 from .sources import DEFAULT_SOURCES, load_all
+from .sources import questie_forever as questie_forever_source
 from .sources import wago as wago_source
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +23,10 @@ DB_PATH = ROOT / "pipeline" / "db.sqlite"
 RAW_DIR = ROOT / "pipeline" / "sources" / "raw"
 OUT_DIR = ROOT / "pipeline" / "out"
 DATA_DIR = ROOT / "addon" / "MonkeDo" / "Data"
+# Summaries already written (by Claude Code subagents or a paid run), committed so a fresh clone
+# rebuilds the same lore. Applied on every summarize, before any other file or provider; a
+# summary whose quest changed fails validation there and is written again.
+SUMMARIES_DIR = ROOT / "pipeline" / "llm" / "summaries"
 
 PROVIDERS = ("none", "batch", "direct", "file")
 NEWLINE = chr(10)
@@ -83,7 +88,8 @@ def _ids(value: str | None) -> list[int] | None:
 def step_load(conn, args) -> int:
     names = [n.strip() for n in args.sources.split(",") if n.strip()]
     _say(f"== load: {', '.join(names)}{' (offline)' if args.offline else ''}")
-    results = load_all(conn, names, RAW_DIR, offline=args.offline, build=args.wago_build)
+    results = load_all(conn, names, RAW_DIR, offline=args.offline, build=args.wago_build,
+                       questie_release=args.questie_release)
     failed = 0
     for result in results:
         _say(f"  {result.source}: {result.rows_written} rows written, {result.rows_skipped} unchanged, "
@@ -104,10 +110,6 @@ def _make_provider(args):
         return providers.AnthropicBatchProvider(model=args.model, state_path=OUT_DIR / "batches.json")
     if args.provider == "direct":
         return providers.AnthropicDirectProvider(model=args.model)
-    if args.provider == "file":
-        if not args.summaries_file:
-            raise SystemExit("--provider file needs --summaries-file")
-        return providers.FileProvider(_merged_summaries(args.summaries_file))
     raise SystemExit(f"unknown provider {args.provider!r}")
 
 
@@ -122,15 +124,25 @@ def step_summarize(conn, args) -> None:
                      (args.prompt_version,))
         conn.commit()
         _say(f"  forgot {len(forgotten)} rejected summaries so they are requested again")
-    if args.provider == "none":
+    if args.provider == "file" and not args.summaries_file:
+        raise SystemExit("--provider file needs --summaries-file")
+    files = [str(path) for path in sorted(SUMMARIES_DIR.glob("*.jsonl"))]
+    if args.provider == "file":
+        files += args.summaries_file
+    run = dict(prompt_version=args.prompt_version, ids=_ids(args.ids), limit=args.limit,
+               max_retries=args.max_retries, no_replay=forgotten)
+    if files:
+        stats = summarize.run(conn, providers.FileProvider(_merged_summaries(files)), **run)
+        _say(f"  written summaries ({len(files)} files): "
+             + ", ".join(f"{key} {value}" for key, value in stats.items()))
+    else:
         pinned = summarize.apply_overrides(conn, args.prompt_version)
-        _say(f"  no LLM provider: {len(pinned)} pinned overrides applied, everything else exports "
-             "rule-based tasks only.")
-        _say("  Use --provider batch to write lore (needs ANTHROPIC_API_KEY and `uv sync --extra llm`).")
+        _say(f"  {len(pinned)} pinned overrides applied")
+    if args.provider in ("none", "file"):
+        _say("  Quests no file covers export rule-based tasks only. `requests` dumps them for a "
+             "writer; --provider batch writes them with the API.")
         return
-    stats = summarize.run(conn, _make_provider(args), prompt_version=args.prompt_version,
-                          ids=_ids(args.ids), limit=args.limit, max_retries=args.max_retries,
-                          no_replay=forgotten)
+    stats = summarize.run(conn, _make_provider(args), **run)
     _say("  " + ", ".join(f"{key} {value}" for key, value in stats.items()))
 
 
@@ -279,6 +291,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="comma list; web sources run only when named here")
             p.add_argument("--offline", action="store_true", help="use cached raw files, no network")
             p.add_argument("--wago-build", default=wago_source.DEFAULT_BUILD)
+            p.add_argument("--questie-release", default=questie_forever_source.RELEASE,
+                           help="QuestieDB release tag for questie_forever (default: the pinned one)")
         if llm:
             p.add_argument("--provider", choices=PROVIDERS, default="none")
             p.add_argument("--model", default=providers.DEFAULT_MODEL)
