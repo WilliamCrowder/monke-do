@@ -8,12 +8,16 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The packager also creates the GitHub release with GITHUB_TOKEN, which new repositories
+    # give read-only access by default.
+    permissions:
+      contents: write
     env:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
       GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       # Interface 16001 makes the packager pick the "forever" game type by itself.
