@@ -81,7 +81,9 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 
 10. Tracked quests show "Grab 10 Red Silk Bandana (3/10)" style lines. No line overlaps the one
     below it. `/monke tracker off` and "Monke don't" put Blizzard's lines back at once, and
-    `/monke tracker on` and "OK, monke do" bring the Monke lines back at once.
+    `/monke tracker on` and "OK, monke do" bring the Monke lines back at once. Then change the
+    voice (`/monke voice plain`) and flip "Monke don't" again: Blizzard's lines come back, not
+    the Monke ones.
 11. Use a quest item button in the tracker during combat: no "action blocked" taint error.
     - Flip "Monke do" / "Monke don't" a few times and change a setting or two, then level up,
       open and close Edit Mode, and change the UI scale. No "Lua Taint: MonkeDo" error, in
@@ -130,7 +132,8 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
     Blizzard's arrow and map pin point at the picked quest (one ready to hand in first, else the
     nearest), with a short click. Press again: the next quest. After the last one a press tracks
     nothing: Blizzard's arrow and map pin go away and the line reads "Nothing now"; the next
-    press starts again from the best quest.
+    press starts again from the best quest. Take a new quest (the game tracks it by itself),
+    then press: the first press always gives the best quest, never "nothing".
     `/monke pick` and a left-click on the line do the same, also in combat. A picked quest you
     are not watching stays off Blizzard's tracker (Monke Do does not add watches, to keep the
     tracker untainted); the strip still shows it.
@@ -159,7 +162,9 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
 
 30. Follow a quest in the open world: the monke icon at the start of the Now line becomes a
     pointing monke finger. Turn on the spot in a full circle: the finger turns the other way and
-    keeps pointing at the quest, the same way as the gold arrow on the edge of the minimap (and
+    keeps pointing at the quest. Check it against the gold arrow on the edge of the minimap
+    while facing north (or with Rotate Minimap on): that arrow points on the map, not from where
+    you face, so the two agree only then. With the map open, it points toward the quest's area (and
     toward the quest's area with the map open). Walk the way it points: the distance on the line
     goes down. The finger reads at a glance, hangs only a little over the strip and does not
     touch the words, also when it points straight right at them. It has a pale gold rim and
@@ -185,7 +190,8 @@ Forever beta (or live) with BugSack and BugGrabber installed, after `/reload`.
     the distance in grey, nearest first; quests with no distance (another continent, a dungeon)
     last. Walk toward a quest further down: within a few seconds it climbs the list.
 36. Hover a line: the tooltip shows the quest title and the whole step. The list does not
-    reorder while the mouse is over it. Click a line: that quest gets the monke icon and gold
+    reorder while the mouse is over it, also while you auto-run toward another quest or loot
+    something. Click a line: that quest gets the monke icon and gold
     text, the Now line and its finger switch to it, and Blizzard's arrow points at it, with the
     short select sound. No map opens and nothing is blocked, also in combat.
 37. With more than ten quests the last line reads "+N more". Turning in or abandoning quests

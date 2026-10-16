@@ -130,8 +130,16 @@ Lower number wins. Within one source the newest `fetched_at` wins.
 
 A field the winner lacks is filled from the next source that has it. When two
 sources both have a field for one ID and the normalised text differs, a
-`text_diffs` row is written. A Questie-versus-web diff on an ID below 90000
-means Forever rewrote that vanilla quest.
+`text_diffs` row is written. A Questie-versus-web diff on a vanilla quest means
+Forever rewrote it. Vanilla means in Classic Questie (`pipeline/classic_quest_ids.txt`,
+4,244 IDs); every other quest is new in Forever, whatever its ID (v1.0.6: 982 new, 110 of
+them below 90000).
+
+`questie` and `questie_forever` are two versions of one database: they never load in one run
+(`load_all` refuses), and each deletes the other's rows, objectives and ID list when it loads.
+Each load is authoritative for its own source: rows and objectives an earlier load wrote for
+quests it no longer has, or has without text, are deleted, and a quest's objectives are
+replaced even by an empty list (rows with db2 amounts stay). `quest_meta` stays merged.
 
 ### `objectives`
 
@@ -216,6 +224,19 @@ fingerprint of the full context the writer saw (text, objectives, turn-in, group
 data). A row whose fingerprint no longer matches is stale: the summarizer
 requests it again and the exporter falls back to rule-based tasks.
 
+Committed summary lines (`pipeline/llm/summaries/*.jsonl`) carry the same facts as a stamp,
+right after the id: `{"id": 214, "prompt_version": "v1", "text_hash": "<16 hex>",
+"context_hash": "<16 hex>", "lore_monke": ..., "lore_plain": ..., "tasks": [...],
+"group_line": ...}`. `requests` puts the stamp into every request; `check` refuses a line
+stamped for another version of its quest, and `--stamp` or `--out` stamps lines that pass. The
+stamp is stripped before validation. A committed line applies only to a quest with the same
+stamp; any other quest gets no row (and `requests` lists it again), never an ok row, and a line
+without a stamp is never applied. Files apply in version order (digit runs compare as numbers)
+and the newest fitting line wins. A file pass checks a cached row again when the files now hold
+other text for that version of the quest: a rejected row from any writer, or an ok row a file
+wrote (replaced only by text that passes). An ok row from the API is never replaced by a file.
+`--ids` and `--limit` never limit the committed pass.
+
 An objective line in the request may carry `text: ...`, the objective's own
 wording ("Heal and fortify Sentinel Shaya" on a `monster` objective). Its bullet
 is then `Do the thing: {text}.`, never the type's verb; `pipeline/rules.py` and
@@ -272,13 +293,22 @@ These correct assumptions in the build plan. Workers rely on these, not the plan
   tracker now appends quest tags such as "(Elite)" to quest titles; Monke Do rewrites objective
   lines only, so this does not touch it.
 - The Now line's arrow uses `C_Map.GetBestMapForUnit`, `GetPlayerMapPosition`, `GetMapWorldSize`,
-  `GetMapInfo`, `GetWorldPosFromMapPos`, `GetMapPosFromWorldPos`, `C_QuestLog.GetNextWaypoint`,
+  `GetMapInfo`, `GetWorldPosFromMapPos`, `C_QuestLog.GetNextWaypoint`,
   `GetQuestsOnMap` (rows carry `questID`, `mapID`, `x`, `y`), `GetQuestUiMapID`, `GetPlayerFacing`
   and `CreateVector2D`. All are in build 70338's API documentation or dump, and none returns a
   secret value. Map x grows east and y south; `GetPlayerFacing` is 0 for north, counter-clockwise.
   Forever ships Blizzard's own on-screen guide (`Blizzard_QuestNavigation`, atlas
   `Navigation-Tracked-Arrow`, drawn pointing up), but Forever's settings have no option to turn
   it on.
+- Checked on 2026-10-15 against the pinned v1.0.6 asset (`QuestieDB-Forever.zip`, 13,514,513
+  bytes, sha256 `d78b066c362eaf28258d9e2d041c0a7b03d6943a2dfc741dec70c6bfd8e1fc27`, pinned as
+  `RELEASE_SHA256` and `RELEASE_BYTES` and checked before every load): the TOC unpacks to
+  15,901,322 bytes; 1,050 values are chunked, into at most 236 parts; the values are standard
+  base64, and their CBOR has no tags, no text strings and no booleans, nested at most 5 deep. Of
+  its 5,226 quest IDs, all 4,244 Classic Questie quests are among them and 982 are new in Forever
+  (110 of those below 90000). 3,140 `S` rows are list-shaped (Lua sequences written as CBOR
+  arrays: 2 quests, 1,428 NPCs, 7 items, 1,703 objects); `questie_forever` reads them like any
+  other row, field 1 first.
 - Calling Blizzard's map code from addon code (`QuestMapFrame_OpenToQuestDetails` and the
   like) leaves the map and tracker state tainted, and their next refresh in combat is
   blocked. The Now line therefore never opens the map; super-tracking is enough.
@@ -295,9 +325,12 @@ These correct assumptions in the build plan. Workers rely on these, not the plan
   and sentences as Classic, differing only in race masks). They live in correction files on
   QuestieDB's Forever branches and are folded into the built `QuestieDB-Forever.zip` attached
   to every QuestieDB release, which is what Questie in the Forever client loads. v1.0.6
-  (2026-10-12) holds 5,226 quests, 870 of them at 90000 or above, 836 of those with an
+  (2026-10-12) holds 5,226 quests, 872 of them at 90000 or above, 836 of those with an
   objectives sentence. Per QuestieDB's `docs/forever-delta-base.md`, most new quests come
   from an offline import of Wowhead's Forever pages, then player traces and hand corrections.
+  Owner's decision, 2026-10-15: ship every quest in the pinned release, as QuestieDB publishes
+  it, including the rows from that import. Credit QuestieDB and send questions about the data's
+  origin there (CREDITS.txt, README). Monke Do itself still never fetches anything from Wowhead.
   `questie_forever` reads that release (pinned, `RELEASE`) and is the default Questie source;
   `questie` (Classic master) is kept but no longer runs by default. The release stores each
   value as base64 CBOR in the TOC's `## X-` metadata lines (see the module docstring). It

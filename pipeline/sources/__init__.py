@@ -51,6 +51,17 @@ def _check_options(options: dict, selected: list[ModuleType]) -> None:
         raise ValueError(f"no source takes the option(s): {', '.join(unknown)}")
 
 
+def _check_conflicts(selected: list[ModuleType]) -> None:
+    """Sources that are versions of one database (`CONFLICTS`) never run together: each purges
+    the other's rows when it loads, so running both would keep only whichever ran last."""
+    names = {module.SOURCE for module in selected}
+    for module in selected:
+        clash = sorted(set(getattr(module, "CONFLICTS", ())) & names)
+        if clash:
+            raise ValueError(f"{module.SOURCE} and {', '.join(clash)} cannot load in one run: they are "
+                             "versions of one database at one priority. Pick one.")
+
+
 def load_all(
     conn: sqlite3.Connection,
     names: list[str],
@@ -68,6 +79,7 @@ def load_all(
     """
     modules = [get_module(name) for name in dict.fromkeys(names)]  # fail on a typo before any work
     _check_options(options, modules)
+    _check_conflicts(modules)
     modules.sort(key=lambda module: module.PRIORITY)  # stable: ties keep the caller's order
 
     results: list[db.SourceResult] = []

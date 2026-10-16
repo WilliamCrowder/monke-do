@@ -40,7 +40,7 @@ read_globals = {
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent",
     "PlaySound", "SOUNDKIT", "issecretvalue",
     -- the original-text toggle's voice lines
-    "PlaySoundFile",
+    "PlaySoundFile", "StopSound",
     -- the Now line's arrow: where the player is and faces, where the quest is
     "C_Map", "GetPlayerFacing", "GetQuestUiMapID", "CreateVector2D",
     -- Deliberately NOT here: QuestMapFrame_* and other Blizzard map/tracker functions. Calling them

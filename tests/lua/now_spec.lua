@@ -129,6 +129,9 @@ describe("Now line", function()
             assert.are.equal(6 * #(TAKE .. DOT .. "120 yd") + 1, frame.monkeLine:GetWidth())
             Now.Say(("Monke say a very long thing. "):rep(8))
             assert.are.equal(310, frame.monkeLine:GetWidth())
+            Now.Say("Short.")
+            Now.Say("A longer line than the one before it.") -- measured whole, not cut to the last width
+            assert.are.equal(6 * #"A longer line than the one before it." + 1, frame.monkeLine:GetWidth())
             atHome()
         end)
     end)
@@ -319,12 +322,13 @@ describe("Now line", function()
             track(214)
             Now.Say("Hello")
             assert.are.equal("Hello", line())
+            WowStubs.click(frame, "LeftButton") -- the first press gives the best: the same quest
+            assert.are.equal(214, WowStubs.superTracked)
+            assert.are.equal(at(TAKE, "120 yd"), line())
+            Now.Say("Hello")
             WowStubs.click(frame, "LeftButton") -- past the only quest: track nothing
             assert.are.equal(0, WowStubs.superTracked)
             assert.are.equal(INVITE, line())
-            Now.Say("Hello")
-            WowStubs.click(frame, "LeftButton") -- and back to it
-            assert.are.equal(at(TAKE, "120 yd"), line())
             WowStubs.log = {}
             WowStubs.click(frame, "LeftButton") -- nothing left to pick
             assert.are.equal("No quest. Monke go find quest giver.", line())

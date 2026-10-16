@@ -99,13 +99,30 @@ function Core.GetRecord(questID)
     return db[questID]
 end
 
+-- The voice line playing now: the next one cuts it off rather than talk over it (the toggle is
+-- often flipped and flipped back inside the 2.5 seconds a line lasts).
+local voiceHandle
+
+-- Plays one voice line; true when the client will play it.
+local function playVoice(path)
+    if not PlaySoundFile then
+        return false
+    end
+    if voiceHandle and StopSound then
+        StopSound(voiceHandle)
+    end
+    local willPlay, handle = PlaySoundFile(path, "SFX")
+    voiceHandle = willPlay and handle or nil
+    return willPlay and true or false
+end
+
 -- The voice line for the state just switched to. A client that cannot play the file (none
 -- shipped yet, or no PlaySoundFile) gets the settings checkbox click instead.
 local function playToggleSound(original)
     if not Core.Get("sounds") then
         return
     end
-    local played = PlaySoundFile and PlaySoundFile(original and SOUND_MONKE_OFF or SOUND_MONKE_ON, "SFX")
+    local played = playVoice(original and SOUND_MONKE_OFF or SOUND_MONKE_ON)
     if not played and PlaySound and SOUNDKIT then
         local kit = original and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
         if kit then
@@ -151,9 +168,7 @@ function Core.OnQuestAccepted(questID)
         return
     end
     lastAcceptSound = now
-    if PlaySoundFile then
-        PlaySoundFile(SOUND_MONKE_ON, "SFX")
-    end
+    playVoice(SOUND_MONKE_ON)
 end
 
 function Core.OriginalStateText(original)

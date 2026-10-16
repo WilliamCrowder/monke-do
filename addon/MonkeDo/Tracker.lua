@@ -47,7 +47,12 @@ function Tracker.RewriteLine(line, objective, voice)
         text:SetText(old) -- would wrap onto a line the layout did not leave room for
         return false
     end
-    line.monkeOriginal, line.monkeText = old, new
+    -- Blizzard's text is what the toggle puts back. A line still showing our last rewrite (a
+    -- voice change rewrites it again) keeps the original it already had.
+    if line.monkeText == nil or old ~= line.monkeText then
+        line.monkeOriginal = old
+    end
+    line.monkeText = new
     return true
 end
 

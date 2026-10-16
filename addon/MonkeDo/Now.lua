@@ -579,7 +579,11 @@ local function createFrame()
     driver:SetScript("OnUpdate", function(_, elapsed)
         sinceTurn = sinceTurn + (tonumber(elapsed) or 0)
         if sinceTurn >= ARROW_SECONDS then
-            sinceTurn = 0
+            -- Keep the remainder, so the rate holds at 25 a second whatever the frame rate.
+            sinceTurn = sinceTurn - ARROW_SECONDS
+            if sinceTurn >= ARROW_SECONDS then
+                sinceTurn = 0 -- a long frame: no catching up
+            end
             Now.PointArrow()
         end
     end)

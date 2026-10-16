@@ -30,7 +30,8 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
 - The quest frame is hooked through `QuestInfo_Display`. `hooksecurefunc` on the
   `QuestInfo_Show*` globals never fires (the templates hold direct references).
 - Web fetchers run only when named in `--sources`, never from tests or CI. There is no Wowhead
-  fetcher on purpose (its terms forbid scraping).
+  fetcher on purpose (its terms forbid scraping). QuestieDB's published Forever release is used
+  as published, all of it (the owner's decision; DATA_CONTRACT section 8).
 - Never make a real LLM API call from tests. Providers are exercised with fakes.
 - The game cannot be run from here. Anything in `Display.lua`, `Tracker.lua`, `Now.lua`, `Arrow.lua` or `List.lua` needs a
   line in `docs/INGAME_CHECKLIST.md` for the human to check. Check Blizzard behaviour against the
@@ -43,10 +44,17 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
 
 - `pipeline/db.py` is the schema. Sources write through its helpers only.
 - `pipeline/sources/` one module per source, same `load()` interface. `questie_forever` (the
-  pinned QuestieDB Forever release) and `wago` run by default; README has the update steps.
+  QuestieDB Forever release, pinned by tag and digest: `RELEASE`, `RELEASE_SHA256`,
+  `RELEASE_BYTES`) and `wago` run by default; README has the update steps. `questie` and
+  `questie_forever` never load together, and every load deletes what an older load of its own
+  source wrote.
+- `pipeline/classic_quest_ids.txt` every quest ID in Classic Questie: the vanilla quests. A quest
+  not in it is new in Forever, whatever its ID.
 - `pipeline/llm/summaries/*.jsonl` every summary written so far, applied on every `summarize`.
-  New writers' output goes here once it passes `check`; it is the only copy that survives a
-  fresh clone (the SQLite database and `pipeline/out/` are gitignored).
+  Each line is stamped (`prompt_version`, `text_hash`, `context_hash`) with the version of the
+  quest it was written for and applies to that version only; never hand-edit a stamp to make a
+  stale line apply. New writers' output goes here through `check ... --out <file>`; it is the
+  only copy that survives a fresh clone (the SQLite database and `pipeline/out/` are gitignored).
 - `pipeline/llm/` prompt (`prompts/v1.md`), providers, summarize loop, `overrides.jsonl`
   (hand-pinned summaries that beat the LLM but not the validator).
 - `pipeline/validate.py` decides what ships. `pipeline/export.py` writes the Lua. Cached
@@ -54,7 +62,8 @@ globals through `_G.` (busted sandboxes bare assignments; the local runner does 
   "stale", never "ship it".
 - `pipeline/out/translate/` holds the chunked requests, the writers' output and the editors'
   corrections for summaries written by Claude Code subagents (`python -m pipeline requests
-  --chunk-size 120`, then `summarize --provider file --summaries-file <out> --summaries-file <fix>`).
+  --chunk-size 120`; writers copy each request's stamp into their answer; then `check
+  --summaries-file <out> --summaries-file <fix> --out pipeline/llm/summaries/<name>.jsonl`).
 - `tests/lua/wow_stubs.lua` is the fake WoW client used by the specs. It mimics Blizzard's
   quest templates (the log view builds Blizzard's own objective list; headers keep their text
   across redraws; parchment colours by default, `WowStubs.stone()` for Quest Text Contrast),

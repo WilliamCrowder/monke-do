@@ -180,14 +180,32 @@ def test_meta_defaults(tmp_path: Path) -> None:
     assert len(meta.generated) == 10  # today's date, YYYY-MM-DD
 
 
+CLASSIC = frozenset({7, 9, 214, 300, 301})  # the vanilla quests of make_db
+
+
 def test_coverage_split(tmp_path: Path) -> None:
-    result = export.write(make_db(), tmp_path, build="b", generated="2026-10-01")
+    result = export.write(make_db(), tmp_path, build="b", generated="2026-10-01", classic_ids=CLASSIC)
     assert result["count"] == 5
     assert result["lore"] == {"vanilla": 2, "new": 0}
     assert result["tasks_only"] == {"vanilla": 2, "new": 1}
     assert result["title_only"] == {"vanilla": 1, "new": 1}
     printed = export.format_coverage(result)
     assert "with lore" in printed and "title only (not exported)" in printed
+
+
+def test_new_quests_are_the_ones_classic_lacks_not_the_high_ids(tmp_path: Path) -> None:
+    """Forever adds quests below 90000 too (107 shipped records in October). A quest is new
+    when Classic Questie does not have it."""
+    conn = make_db()
+    result = export.write(conn, tmp_path / "a", build="b", generated="2026-10-01",
+                          classic_ids=CLASSIC - {300})
+    assert result["title_only"] == {"vanilla": 0, "new": 2}
+    # By default the committed Classic list decides; quest 300 is not in it either.
+    assert 300 not in db.classic_quest_ids() and 214 in db.classic_quest_ids()
+    assert export.write(conn, tmp_path / "b", build="b", generated="2026-10-01")["title_only"] == \
+        {"vanilla": 0, "new": 2}
+    printed = export.format_coverage(result)
+    assert "new in Forever" in printed and "90000" not in printed
 
 
 def test_summary_for_old_quest_text_is_not_exported(tmp_path: Path) -> None:

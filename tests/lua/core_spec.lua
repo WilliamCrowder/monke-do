@@ -92,6 +92,15 @@ describe("Core", function()
             SlashCmdList["MONKEDO"]("sound on")
             assert.has_no.errors(function() Core.ToggleOriginal() end)
         end)
+        it("a new voice line cuts off the one still playing, so two never talk over each other", function()
+            Core.ToggleOriginal() -- "Monke don't", handle 1
+            assert.are.same({}, WowStubs.stoppedSounds)
+            Core.ToggleOriginal() -- "OK, monke do" stops it first
+            assert.are.same({ 1 }, WowStubs.stoppedSounds)
+            WowStubs.fire("QUEST_ACCEPTED", 214) -- and so does taking a quest
+            assert.are.same({ 1, 2 }, WowStubs.stoppedSounds)
+            assert.are.equal(3, #WowStubs.soundFiles)
+        end)
         it("accepting a quest says monke do, once per burst, and only while Monke Do text is on", function()
             local DO = "Interface\\AddOns\\MonkeDo\\Media\\monke_do.ogg"
             WowStubs.fire("QUEST_ACCEPTED", 214)
@@ -255,6 +264,12 @@ describe("Core", function()
                 registered.nowLine)
             assert.is_not_nil(checkboxes.nowLine)
             assert.is_not_nil(checkboxes.tracker)
+            assert.are.same({ variable = "MonkeDo_monkeList", varType = "boolean", label = "Monke Do list", default = false },
+                registered.monkeList)
+            assert.is_not_nil(checkboxes.monkeList)
+            assert.are.same({ variable = "MonkeDo_sounds", varType = "boolean", label = "Sounds", default = true },
+                registered.sounds)
+            assert.is_not_nil(checkboxes.sounds)
             assert.are.same({ variable = "MonkeDo_goldArrow", varType = "boolean", label = "Gold arrow", default = false },
                 registered.goldArrow)
             assert.is_not_nil(checkboxes.goldArrow)

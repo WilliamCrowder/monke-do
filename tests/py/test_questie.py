@@ -284,3 +284,66 @@ def test_turnin_kind_tells_the_giver_from_a_delivery_target():
     assert questie.turnin({2: {1: 2704}}, {1: {1: 820}}, names) == ("Broken Barrel", "object")
     assert questie.turnin({1: {1: 234}}, None, names) == ("Gryan Stoutmantle", "other")
     assert questie.turnin(None, None, names) == (None, None)
+
+
+# ---------------------------------------------------------------- which quests are vanilla
+
+
+def test_the_committed_classic_list_is_classic_questie():
+    """pipeline/classic_quest_ids.txt: every quest ID in Classic Questie, the vanilla quests.
+    Forever's new quests are the ones it lacks, below 90000 (490, 5640, 65593...) or above."""
+    ids = db.classic_quest_ids()
+    assert len(ids) == 4244 and max(ids) < 90000
+    assert {2, 7, 214, 9001} <= ids and not {1, 300, 490, 5640, 65593} & ids
+    assert not db.is_new_quest(214) and db.is_new_quest(490) and db.is_new_quest(92867)
+    assert db.is_new_quest(214, classic={7}) and not db.is_new_quest(490, classic={490})
+
+
+def test_the_classic_list_is_regenerated_from_the_files(tmp_path):
+    out = tmp_path / "classic_quest_ids.txt"
+    assert questie.write_classic_ids(FIXTURES / "questie", out) == 8
+    assert db.read_classic_ids(out) == frozenset({214, 9001, 9002, 9003, 9004, 9005, 9006, 9007})
+    assert out.read_text(encoding="utf-8").startswith("# ")  # says where it came from
+
+
+# ---------------------------------------------------------------- each load is authoritative
+
+
+def test_a_classic_load_purges_the_forever_release_rows():
+    """The Classic files and the Forever release are two versions of one database at the same
+    priority: whichever loads replaces the other, so neither refills the other's gaps."""
+    conn = db.connect()
+    db.upsert_source_row(conn, db.QuestRow(id=214, source="questie_forever", title="Red Silk Bandanas",
+                                           objectives_text="Bring 12 Red Silk Bandanas.", turnin_npc="Scout Riell"))
+    db.upsert_source_row(conn, db.QuestRow(id=92867, source="questie_forever", title="Ground to Keep"))
+    db.replace_objectives(conn, 92867, [db.Objective(92867, 1, "monster", 2569, "Boulderfist Mauler", 1,
+                                                     "default", None, "questie_forever")])
+    db.add_known_ids(conn, [214, 92867], "questie-forever")
+    questie.load(conn, FIXTURES, offline=True)
+    assert conn.execute("SELECT COUNT(*) FROM source_rows WHERE source = 'questie_forever'").fetchone()[0] == 0
+    assert db.get_objectives(conn, 92867) == []
+    assert conn.execute("SELECT COUNT(*) FROM known_ids WHERE build = 'questie-forever'").fetchone()[0] == 0
+    assert conn.execute("SELECT objectives_text FROM source_rows WHERE id = 214").fetchone()[0].endswith(
+        "bring her 10 Red Silk Bandanas.")
+
+
+def test_a_reload_forgets_quests_and_objectives_the_files_no_longer_have(tmp_path):
+    raw = tmp_path / "questie"
+    raw.mkdir()
+    for path in (FIXTURES / "questie").glob("*.lua"):
+        (raw / path.name).write_bytes(path.read_bytes())
+    conn = db.connect()
+    questie.load(conn, tmp_path, offline=True)
+    assert db.get_objectives(conn, 9001) and db.get_objectives(conn, 9006)
+
+    quests = raw / questie.QUEST_DB.filename
+    text = quests.read_text(encoding="utf-8")
+    text = "\n".join(line for line in text.splitlines() if not line.startswith("[9006] = "))
+    text = text.replace('{{{9201},{9202,"Ridge Stalker slain"}}}', "nil")
+    quests.write_text(text + "\n", encoding="utf-8")
+    questie.load(conn, tmp_path, offline=True)
+    assert conn.execute("SELECT COUNT(*) FROM source_rows WHERE id = 9006").fetchone()[0] == 0
+    assert db.get_objectives(conn, 9006) == []
+    assert db.get_objectives(conn, 9001) == []  # the row stays, its objectives are gone
+    assert conn.execute("SELECT COUNT(*) FROM source_rows WHERE id = 9001").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM known_ids WHERE id = 9006").fetchone()[0] == 0

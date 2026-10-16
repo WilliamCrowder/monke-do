@@ -160,18 +160,30 @@ describe("Monke pick", function()
             assert.are.same({ 875 }, WowStubs.sounds)
         end)
 
-        it("moves on from the quest already super-tracked, then tracks nothing, then starts over", function()
+        it("starts at the best, moves on with each press, then tracks nothing, then starts over", function()
             quest(30, 200)
             quest(31, 50)
             quest(32, 400, { ready = true }) -- ranking: 32, 31, 30
-            WowStubs.superTracked = 31
+            WowStubs.superTracked = 31 -- tracked by the game or the player, not by Monke pick
+            assert.are.equal(32, Pick.Next()) -- "which quest now?": the best
+            assert.are.equal(31, Pick.Next())
             assert.are.equal(30, Pick.Next())
             assert.are.equal(0, Pick.Next()) -- after the last: nothing, so Blizzard's arrow goes away
             assert.are.equal(0, WowStubs.superTracked)
             assert.are.equal("Nothing now. Click: Monke pick.", nowLine())
             assert.are.equal(32, Pick.Next())
-            assert.are.equal(31, Pick.Next())
-            assert.are.equal(4, #WowStubs.sounds)
+            assert.are.equal(5, #WowStubs.sounds)
+        end)
+
+        it("never answers nothing on a first press, whatever the game tracked by itself", function()
+            quest(30, 50)
+            quest(31, 200)
+            quest(32, nil) -- just taken, no map marker yet: ranked last
+            WowStubs.superTracked = 32 -- the game tracks a quest just taken by itself
+            WowStubs.fire("SUPER_TRACKING_CHANGED")
+            assert.are.equal(30, Pick.Next())
+            WowStubs.superTracked = 32 -- the player clicks it in the tracker
+            assert.are.equal(30, Pick.Next())
         end)
 
         it("starts at the top when the super-tracked quest is not one it would pick", function()

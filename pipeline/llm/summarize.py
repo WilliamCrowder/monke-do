@@ -22,6 +22,7 @@ from pipeline.llm.providers import (
     Provider,
     ProviderError,
     Result,
+    Stamp,
     SummaryRequest,
     read_summary_lines,
 )
@@ -239,26 +240,56 @@ class _Work:
     attempts: int = 0
     last_output: str | None = None
     model: str = ""
+    stamp: Stamp | None = None  # the version of the quest being summarised
+    keep_ok: bool = False  # re-checking newer file text against an ok row: keep the row unless it passes
+
+
+def _superseded(offered: dict | None, cached: sqlite3.Row) -> bool:
+    """True when a file now holds other text for this version of the quest than the cached row.
+
+    That re-checks a rejected row (whoever wrote it) once a fix is committed, and keeps an ok row
+    a file wrote in step with the files, so an old database ships what a fresh clone would. An
+    ok row from a paid provider is never second-guessed by a file, and pinned overrides never
+    reach here.
+    """
+    if offered is None:
+        return False
+    if cached["status"] == "ok" and not str(cached["model"] or "").startswith("file:"):
+        return False
+    try:
+        return json.loads(cached["json"] or "null") != offered
+    except ValueError:
+        return True
 
 
 def _pending(
     conn: sqlite3.Connection, prompt_version: str, ids: Iterable[int] | None, limit: int | None,
-    pinned: set[int], stats: dict,
+    pinned: set[int], stats: dict, provider: Provider | None = None, exclude: set[int] = frozenset(),
 ) -> dict[int, _Work]:
     wanted = set(ids) if ids is not None else None
+    offer = getattr(provider, "offer", None)
     pending: dict[int, _Work] = {}
     for quest in conn.execute("SELECT * FROM quests ORDER BY id").fetchall():
-        if (wanted is not None and quest["id"] not in wanted) or quest["id"] in pinned:
+        quest_id = quest["id"]
+        if (wanted is not None and quest_id not in wanted) or quest_id in pinned or quest_id in exclude:
             continue
         stats["quests"] += 1
         ctx = load_context(conn, quest)
-        cached = get_summary(conn, quest["id"], quest["text_hash"], prompt_version, ctx.fingerprint())
         if not ctx.has_prose():
             stats["skipped_no_prose"] += 1
-        elif cached is not None and cached["status"] in CACHED_STATUSES:
-            stats["cached"] += 1
-        elif limit is None or len(pending) < limit:
-            pending[quest["id"]] = _Work(ctx, quest["text_hash"], build_user_message(ctx))
+            continue
+        stamp = Stamp(prompt_version, quest["text_hash"], ctx.fingerprint())
+        cached = get_summary(conn, quest_id, quest["text_hash"], prompt_version, stamp.context_hash)
+        recheck = False
+        if cached is not None and cached["status"] in CACHED_STATUSES:
+            recheck = offer is not None and _superseded(offer(quest_id, stamp), cached)
+            if not recheck:
+                stats["cached"] += 1
+                continue
+        if limit is None or len(pending) < limit:
+            pending[quest_id] = _Work(ctx, quest["text_hash"], build_user_message(ctx), stamp=stamp,
+                                      keep_ok=recheck and cached["status"] == "ok")
+            stats["rechecked"] += recheck
     return pending
 
 
@@ -300,10 +331,11 @@ def _ask(
             if provider.paid and hasattr(provider, "on_result"):
                 provider.on_result(None)
         stats["requested"] += len(to_send)
+        model_for = getattr(provider, "model_for", None)  # a file names the file that answered
         for request in to_send:
             result = answers.get(request.quest_id, ProviderError("the provider returned nothing"))
             work = pending[request.quest_id]
-            work.model = provider.model
+            work.model = model_for(request.quest_id) if model_for is not None else provider.model
             if isinstance(result, str) and provider.paid and request.quest_id not in logged_early:
                 log.append(request, result, model=provider.model, text_hash=work.text_hash,
                            prompt_version=prompt_version)
@@ -338,22 +370,30 @@ def run(
     overrides_path: Path | None = None,
     log_path: Path | None = DEFAULT_LOG_PATH,
     no_replay: Iterable[int] = (),
+    exclude: Iterable[int] = (),
 ) -> dict:
     """Fill `summaries` for every quest that needs one. Returns counters for the CLI.
 
     `limit` caps how many quests are sent to the provider in this run. `log_path=None`
     turns the raw response log off (tests); `overrides_path=None` means the default
     pipeline/llm/overrides.jsonl. Quests in `no_replay` are asked again even when the
-    raw log holds an answer (the CLI passes the ids it forgot with --retry-rejected).
+    raw log holds an answer (the CLI passes the ids it forgot with --retry-rejected), and
+    quests in `exclude` are left out (the CLI keeps those ids away from the committed files
+    when a paid provider is to answer them).
+
+    Every request carries the stamp of the quest as it is now, which is all a file can answer
+    for. When the provider is a file whose text for a quest differs from the cached row (a fix
+    committed after a rejection, a correction to a draft), the quest is checked again
+    (`rechecked`); an ok row stays unless the new text passes too (`kept`).
     """
     no_replay = set(no_replay)
     stats = dict.fromkeys(("quests", "overrides", "cached", "skipped_no_prose", "pending",
-                           "requested", "replayed", "rounds", "ok", "rejected", "error",
-                           "not_provided"), 0)
+                           "rechecked", "requested", "replayed", "rounds", "ok", "rejected", "kept",
+                           "error", "not_provided"), 0)
     system = load_prompt(prompt_version)
     pinned = apply_overrides(conn, prompt_version, overrides_path)
     stats["overrides"] = len(pinned)
-    pending = _pending(conn, prompt_version, ids, limit, pinned, stats)
+    pending = _pending(conn, prompt_version, ids, limit, pinned, stats, provider, set(exclude))
     stats["pending"] = len(pending)
     log = ResponseLog(log_path)
 
@@ -361,7 +401,8 @@ def run(
         if not pending:
             break
         stats["rounds"] += 1
-        requests = [SummaryRequest(qid, system, w.user, w.feedback) for qid, w in pending.items()]
+        requests = [SummaryRequest(qid, system, w.user, w.feedback, stamp=w.stamp)
+                    for qid, w in pending.items()]
         results = _ask(provider, requests, pending, log, prompt_version, stats, no_replay)
         may_retry = round_no < max_retries and provider.supports_feedback
         for quest_id, result in results.items():
@@ -377,6 +418,10 @@ def run(
             if verdict is None:
                 continue
             status, errors = verdict
+            if work.keep_ok and status != "ok":
+                stats["kept"] += 1  # a file's newer text failed: the ok row it would replace stays
+                del pending[quest_id]
+                continue
             save_summary(conn, quest_id, work.text_hash, prompt_version, model=work.model,
                          summary_json=work.last_output, status=status, errors=errors,
                          attempts=work.attempts, context_hash=work.ctx.fingerprint())

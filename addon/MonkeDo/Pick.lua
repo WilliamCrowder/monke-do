@@ -1,7 +1,10 @@
 -- Pick.lua: Monke pick, "which quest now?" in one keypress.
 -- Ranks the quest log (ready to hand in first, then nearest first) and super-tracks the
 -- winner, so Blizzard's own arrow and waypoint point there. Pressing again means "not that
--- one, another": it moves on to the next quest in the ranking and wraps at the end.
+-- one, another": it moves on to the next quest in the ranking, after the last one it tracks
+-- nothing, and the press after that starts from the best again. Only Monke pick's own picks
+-- are stepped on from: a quest tracked some other way (the game tracks a quest just taken by
+-- itself, a click on the tracker or the list) starts the next press from the best.
 -- Super-tracking is an ordinary call, not a protected one, so this works in combat too.
 
 local _, ns = ...
@@ -168,10 +171,13 @@ function Pick.Track(questID)
     end
 end
 
--- Monke pick. Super-tracks the best quest, or the one after the quest already
--- super-tracked. After the last one it tracks nothing (Blizzard's arrow and the Now line go
--- quiet), and the click after that starts from the best quest again. Returns the chosen quest
--- ID, 0 for "nothing", or nil when there is nothing to pick.
+-- The quest Monke pick itself tracked last (0 for "nothing"), to step on from.
+local pickedByNext
+
+-- Monke pick. Super-tracks the best quest, or the one after Monke pick's last pick while that
+-- is still the quest tracked. After the last one it tracks nothing (Blizzard's arrow and the
+-- Now line go quiet), and the click after that starts from the best quest again. Returns the
+-- chosen quest ID, 0 for "nothing", or nil when there is nothing to pick.
 function Pick.Next()
     local voice = Core.Get("voice")
     local Now = ns.Now
@@ -187,13 +193,16 @@ function Pick.Next()
 
     local current = Pick.SuperTracked()
     local choice = ranked[1]
-    for position, candidate in ipairs(ranked) do
-        if candidate.questID == current then
-            choice = ranked[position + 1] -- nil after the last: track nothing
-            break
+    if current and current ~= 0 and current == pickedByNext then
+        for position, candidate in ipairs(ranked) do
+            if candidate.questID == current then
+                choice = ranked[position + 1] -- nil after the last: track nothing
+                break
+            end
         end
     end
     local questID = choice and choice.questID or 0
+    pickedByNext = questID
     Pick.Track(questID)
     if nowUp then
         return questID

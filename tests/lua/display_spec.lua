@@ -563,6 +563,51 @@ describe("Display", function()
     end)
 end)
 
+describe("Tracker after a voice change", function()
+    local function block(lines)
+        local usedLines = {}
+        for i, text in ipairs(lines) do
+            usedLines[i] = { Text = WowStubs.newFontString(text) }
+        end
+        return { usedLines = usedLines }
+    end
+
+    -- One watched quest, 214, whose tracker block is `trackerBlock`.
+    local function installTracker(trackerBlock)
+        _G.QuestObjectiveTracker = {
+            UpdateSingle = function() end,
+            GetExistingBlock = function(_, questID) return questID == 214 and trackerBlock or nil end,
+        }
+        _G.C_QuestLog.GetNumQuestWatches = function() return 1 end
+        _G.C_QuestLog.GetQuestIDForQuestWatchIndex = function(index) return index == 1 and 214 or nil end
+    end
+
+    local text, ns
+
+    before_each(function()
+        WowStubs.reset()
+        local b = block({ "3/10 Red Silk Bandana" })
+        installTracker(b)
+        ns = WowStubs.load()
+        WowStubs.login()
+        QuestObjectiveTracker:UpdateSingle({ GetID = function() return 214 end })
+        text = b.usedLines[1].Text
+        assert.are.equal("Grab 10 Red Silk Bandana (3/10)", text:GetText())
+        SlashCmdList["MONKEDO"]("voice plain")
+        assert.are.equal("Collect 10 Red Silk Bandana (3/10)", text:GetText())
+    end)
+
+    it("the toggle still puts Blizzard's line back", function()
+        ns.Core.ToggleOriginal()
+        assert.are.equal("3/10 Red Silk Bandana", text:GetText())
+    end)
+
+    it("/monke tracker off still puts Blizzard's line back", function()
+        SlashCmdList["MONKEDO"]("tracker off")
+        assert.are.equal("3/10 Red Silk Bandana", text:GetText())
+    end)
+end)
+
 describe("Tracker", function()
     local ns
 

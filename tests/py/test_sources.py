@@ -74,3 +74,12 @@ def test_priority_order_options_and_a_failing_source(monkeypatch, tmp_path):
     # The failing source's half-done work is rolled back, the others' work is kept and resolved.
     assert [r[0] for r in conn.execute("SELECT source FROM source_rows ORDER BY id")] == ["questie", "wago"]
     assert [r[0] for r in conn.execute("SELECT id FROM quests ORDER BY id")] == [200, 300]
+
+
+def test_questie_and_questie_forever_never_load_together():
+    """Two versions of one database at one priority: running both would let leftovers of one
+    fill the gaps of the other. Refused before any work."""
+    conn = db.connect()
+    with pytest.raises(ValueError, match="questie_forever"):
+        sources.load_all(conn, ["questie", "questie_forever"], FIXTURES, offline=True)
+    assert conn.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0] == 0

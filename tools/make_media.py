@@ -107,7 +107,9 @@ def draw_arrow() -> Image.Image:
     scale = 8
     big = Image.new("RGBA", (SIZE * scale, SIZE * scale), (0, 0, 0, 0))
     draw = ImageDraw.Draw(big)
-    shape = [(32, 5), (55, 57), (32, 45), (9, 57)]  # tip, right corner, notch, left corner
+    # tip, right corner, notch, left corner: with the outline, all within 32 px of the centre, so
+    # no turn cuts a corner off
+    shape = [(32, 7), (52, 52), (32, 42), (12, 52)]
     points = [(x * scale, y * scale) for x, y in shape]
     draw.line(points + points[:2], fill=OUTLINE, width=5 * scale, joint="curve")
     draw.polygon(points, fill=GOLD)

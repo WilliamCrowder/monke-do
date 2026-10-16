@@ -6,15 +6,19 @@ of their own, so the contract lives in one place.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import re
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 3
-NEW_ID_THRESHOLD = 90000  # Forever-new quests use high IDs; vanilla IDs are below this.
+# Every quest ID in Classic Questie, committed (`questie.write_classic_ids` rebuilds it). A quest
+# it lacks is new in Forever whatever its ID: most new quests are 90000 and up, but not all.
+CLASSIC_IDS_FILE = Path(__file__).resolve().parent / "classic_quest_ids.txt"
 
 TEXT_FIELDS = ("title", "detail", "objectives_text", "progress", "complete")
 
@@ -186,6 +190,31 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def read_classic_ids(path: str | Path) -> frozenset[int]:
+    """A Classic ID list file: one quest ID per line, '#' lines are comments."""
+    ids = set()
+    for number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not line.isdigit():
+            raise ValueError(f"{path}:{number}: expected a quest ID, found {line!r}")
+        ids.add(int(line))
+    return frozenset(ids)
+
+
+@functools.cache
+def classic_quest_ids() -> frozenset[int]:
+    """The vanilla quests: every quest ID in Classic Questie (CLASSIC_IDS_FILE)."""
+    return read_classic_ids(CLASSIC_IDS_FILE)
+
+
+def is_new_quest(quest_id: int, classic: Collection[int] | None = None) -> bool:
+    """True for a quest new in Forever: one Classic Questie does not have. `classic` replaces
+    the committed list (tests, or a caller that already holds it)."""
+    return quest_id not in (classic if classic is not None else classic_quest_ids())
+
+
 _WS = re.compile(r"\s+")
 
 
@@ -294,6 +323,46 @@ def add_known_ids(conn: sqlite3.Connection, ids, build: str) -> int:
         "INSERT OR IGNORE INTO known_ids (id, build) VALUES (?, ?)", ((int(i), build) for i in ids)
     )
     return conn.total_changes - before
+
+
+def replace_known_ids(conn: sqlite3.Connection, ids, build: str) -> int:
+    """Make `build`'s ID list exactly `ids`: IDs a newer copy no longer has are dropped.
+    Returns how many IDs were added, like add_known_ids."""
+    keep = {int(i) for i in ids}
+    gone = [(r[0], build) for r in conn.execute("SELECT id FROM known_ids WHERE build = ?", (build,))
+            if r[0] not in keep]
+    conn.executemany("DELETE FROM known_ids WHERE id = ? AND build = ?", gone)
+    return add_known_ids(conn, sorted(keep), build)
+
+
+def prune_source(conn: sqlite3.Connection, source: str, keep_ids) -> tuple[int, int]:
+    """A load is authoritative for its own source: delete `source`'s rows and objectives for
+    every quest ID it did not write this time (gone from the source, or left without text),
+    so the database never depends on what an older copy of the source said.
+
+    Returns (source rows deleted, quests whose objectives were deleted).
+    """
+    keep = set(keep_ids)
+    rows = [(r[0], source) for r in conn.execute("SELECT id FROM source_rows WHERE source = ?", (source,))
+            if r[0] not in keep]
+    conn.executemany("DELETE FROM source_rows WHERE id = ? AND source = ?", rows)
+    objectives = [(r[0], source) for r in conn.execute(
+        "SELECT DISTINCT quest_id FROM objectives WHERE source = ?", (source,)) if r[0] not in keep]
+    conn.executemany("DELETE FROM objectives WHERE quest_id = ? AND source = ?", objectives)
+    return len(rows), len(objectives)
+
+
+def purge_source(conn: sqlite3.Connection, source: str, known_ids_build: str | None = None) -> int:
+    """Delete everything `source` ever wrote: its rows, its objectives and, with
+    `known_ids_build`, its ID list. For a source that another one replaces (the Classic Questie
+    files and the Forever release are two versions of one database at one priority), so the
+    leftovers of one never fill the gaps of the other. Quest metadata is merged across sources
+    by design and stays. Returns the number of source rows deleted."""
+    deleted = conn.execute("DELETE FROM source_rows WHERE source = ?", (source,)).rowcount
+    conn.execute("DELETE FROM objectives WHERE source = ?", (source,))
+    if known_ids_build is not None:
+        conn.execute("DELETE FROM known_ids WHERE build = ?", (known_ids_build,))
+    return deleted
 
 
 def resolve_quests(conn: sqlite3.Connection) -> dict:

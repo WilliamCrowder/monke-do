@@ -37,11 +37,14 @@ def test_missing_lore_is_known_ids_without_a_quest():
     assert coverage.missing_lore(conn) == [9007, 95002, 95003]
 
 
+CLASSIC = frozenset({214, 9001, 9002, 9003, 9004, 9005, 9006, 9007})  # the fixture's vanilla quests
+
+
 def test_report_numbers():
-    report = coverage.report(_database())
+    report = coverage.report(_database(), classic_ids=CLASSIC)
     assert _number(report, "Quests with text") == 8
-    assert _number(report, "vanilla (id < 90000)") == 7
-    assert _number(report, "new (id >= 90000)") == 1
+    assert _number(report, "vanilla (in Classic Questie)") == 7
+    assert _number(report, "new in Forever") == 1
     assert _number(report, "questie") == 7
     assert _number(report, "wowforevertalents") == 2
     assert _number(report, "detail") == 1
@@ -74,3 +77,10 @@ def test_long_backlog_is_abbreviated():
     report = coverage.report(conn)
     assert _number(report, "Missing lore backlog") == 39
     assert "first IDs: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ..." in report
+
+
+def test_a_quest_classic_lacks_is_new_whatever_its_id():
+    report = coverage.report(_database(), classic_ids=CLASSIC - {9006})
+    assert _number(report, "vanilla (in Classic Questie)") == 6
+    assert _number(report, "new in Forever") == 2
+    assert "90000" not in report

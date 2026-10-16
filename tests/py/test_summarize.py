@@ -26,7 +26,7 @@ from pipeline.llm.providers import (
     ProviderError,
     SummaryRequest,
 )
-from pipeline.validate import QuestContext, validate
+from pipeline.validate import SUMMARY_KEYS, QuestContext, load_context, validate
 
 RIELL_TEXT = "Scout Riell at the Sentinel Hill Tower wants you to bring her 10 Red Silk Bandanas."
 
@@ -695,3 +695,117 @@ def test_direct_provider_hands_over_each_paid_answer_as_it_arrives(fake_anthropi
     with pytest.raises(fake_anthropic.AuthenticationError):
         provider.summarize_many(requests_for(1, 2, 3))
     assert seen == [1]  # the one answer paid for before the failure was handed over
+
+
+# ---------------------------------------------------------------- stamps: what a line was written for
+
+
+def stamp_of(conn, quest_id: int, prompt_version: str = "v1") -> dict:
+    """The stamp `requests` hands a writer for this quest as it is now."""
+    quest = conn.execute("SELECT * FROM quests WHERE id = ?", (quest_id,)).fetchone()
+    return {"prompt_version": prompt_version, "text_hash": quest["text_hash"],
+            "context_hash": load_context(conn, quest).fingerprint()}
+
+
+def write_lines(path: Path, *lines: dict) -> Path:
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def test_a_stamped_line_answers_only_the_version_of_the_quest_it_was_written_for(
+        tmp_path: Path, no_overrides: Path) -> None:
+    conn = make_db()
+    old = {**stamp_of(conn, 7), "context_hash": "0123456789abcdef"}  # written before the quest changed
+    path = write_lines(tmp_path / "a.jsonl", {"id": 214, **stamp_of(conn, 214), **GOOD[214]},
+                       {"id": 7, **old, **GOOD[7]})
+    stats = run(conn, FileProvider(path, require_stamp=True), no_overrides)
+    assert (stats["ok"], stats["not_provided"], stats["rejected"]) == (1, 1, 0)
+    assert json.loads(row(conn, 214)["json"]) == GOOD[214]  # the stamp never reaches the validator
+    assert row(conn, 7) is None  # neither applied nor saved as rejected: a writer gets it again
+
+
+def test_the_newest_line_that_fits_wins(tmp_path: Path) -> None:
+    conn = make_db()
+    stamp = stamp_of(conn, 214)
+    later_release = {**stamp, "text_hash": "fedcba9876543210"}
+    a = write_lines(tmp_path / "a.jsonl", {"id": 214, **stamp, **GOOD[214], "lore_monke": "First draft."})
+    b = write_lines(tmp_path / "b.jsonl", {"id": 214, **stamp, **GOOD[214], "lore_monke": "Corrected."},
+                    {"id": 214, **later_release, **GOOD[214], "lore_monke": "For a later release."})
+    provider = FileProvider([a, b])
+    answer = provider.summarize_many([SummaryRequest(214, "S", "U", stamp=providers.Stamp(**stamp))])[214]
+    assert json.loads(answer)["lore_monke"] == "Corrected."
+    assert set(json.loads(answer)) == set(SUMMARY_KEYS)
+    assert provider.model_for(214) == "file:b.jsonl"
+    v2 = providers.Stamp(**{**stamp, "prompt_version": "v2"})
+    assert isinstance(provider.summarize_many([SummaryRequest(214, "S", "U", stamp=v2)])[214],
+                      providers.NotProvided)
+    assert provider.stale == {214}
+
+
+def test_unstamped_lines_count_only_where_stamps_are_not_required(tmp_path: Path) -> None:
+    path = write_lines(tmp_path / "a.jsonl", {"id": 214, **GOOD[214]})
+    request = SummaryRequest(214, "S", "U", stamp=providers.Stamp("v1", "0" * 16, "1" * 16))
+    assert isinstance(FileProvider(path).summarize_many([request])[214], str)
+    strict = FileProvider(path, require_stamp=True)
+    assert isinstance(strict.summarize_many([request])[214], providers.NotProvided)
+    assert strict.unstamped == {214}
+
+
+@pytest.mark.parametrize("stamp", [
+    {"text_hash": "0123456789abcdef"},
+    {"prompt_version": "v1", "text_hash": "not hex at all!", "context_hash": "0123456789abcdef"},
+    {"prompt_version": "", "text_hash": "0123456789abcdef", "context_hash": "0123456789abcdef"},
+], ids=["part of a stamp", "not a hash", "no prompt version"])
+def test_a_malformed_stamp_is_an_error_naming_the_line(tmp_path: Path, stamp: dict) -> None:
+    path = write_lines(tmp_path / "a.jsonl", {"id": 214, **stamp, **GOOD[214]})
+    with pytest.raises(ValueError, match=r"a\.jsonl:1"):
+        FileProvider(path)
+
+
+def test_a_rejected_row_is_checked_again_when_the_file_text_changes(tmp_path: Path, no_overrides: Path) -> None:
+    conn = make_db()
+    stamp = stamp_of(conn, 214)
+    slip = write_lines(tmp_path / "a.jsonl", {"id": 214, **stamp, **BAD_214})
+    run(conn, FileProvider(slip), no_overrides, ids=[214])
+    assert row(conn, 214)["status"] == "rejected"
+    stats = run(conn, FileProvider(slip), no_overrides, ids=[214])
+    assert (stats["cached"], stats["rechecked"]) == (1, 0)  # the same text is not checked again
+    fix = write_lines(tmp_path / "b.jsonl", {"id": 214, **stamp, **GOOD[214]})
+    stats = run(conn, FileProvider([slip, fix]), no_overrides, ids=[214])
+    assert (stats["rechecked"], stats["ok"]) == (1, 1)
+    assert (row(conn, 214)["status"], row(conn, 214)["model"]) == ("ok", "file:b.jsonl")
+
+
+def test_an_ok_row_from_a_file_follows_the_files_but_never_gets_worse(tmp_path: Path, no_overrides: Path) -> None:
+    """A correction committed later reaches a database that already has the first draft, as it
+    would a fresh clone. A later line that fails the validator does not undo a good one."""
+    conn = make_db()
+    stamp = stamp_of(conn, 214)
+    first = write_lines(tmp_path / "a.jsonl", {"id": 214, **stamp, **GOOD[214]})
+    run(conn, FileProvider(first), no_overrides, ids=[214])
+    better = {**GOOD[214], "lore_monke": "Scout Riell want 10 Red Silk Bandanas back."}
+    second = write_lines(tmp_path / "b.jsonl", {"id": 214, **stamp, **better})
+    run(conn, FileProvider([first, second]), no_overrides, ids=[214])
+    assert json.loads(row(conn, 214)["json"]) == better
+    worse = write_lines(tmp_path / "c.jsonl", {"id": 214, **stamp, **BAD_214})
+    stats = run(conn, FileProvider([first, second, worse]), no_overrides, ids=[214])
+    assert (stats["rechecked"], stats["kept"], stats["rejected"]) == (1, 1, 0)
+    assert (row(conn, 214)["status"], json.loads(row(conn, 214)["json"])) == ("ok", better)
+
+
+def test_paid_rows_are_never_second_guessed_by_a_file(tmp_path: Path, no_overrides: Path) -> None:
+    conn = make_db()
+    run(conn, FakeProvider(good_fn, model="claude-sonnet-5"), no_overrides)
+    other = {**GOOD[214], "lore_monke": "Scout Riell want 10 Red Silk Bandanas back."}
+    path = write_lines(tmp_path / "a.jsonl", {"id": 214, **stamp_of(conn, 214), **other})
+    stats = run(conn, FileProvider(path), no_overrides)
+    assert (stats["rechecked"], stats["cached"]) == (0, 2)
+    assert json.loads(row(conn, 214)["json"]) == GOOD[214]
+
+
+def test_exclude_keeps_quests_out_of_a_run(no_overrides: Path) -> None:
+    conn = make_db()
+    provider = FakeProvider(good_fn)
+    run(conn, provider, no_overrides, exclude={214})
+    assert [r.quest_id for r in provider.calls[0]] == [7]
+    assert row(conn, 214) is None

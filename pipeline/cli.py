@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -24,16 +25,35 @@ RAW_DIR = ROOT / "pipeline" / "sources" / "raw"
 OUT_DIR = ROOT / "pipeline" / "out"
 DATA_DIR = ROOT / "addon" / "MonkeDo" / "Data"
 # Summaries already written (by Claude Code subagents or a paid run), committed so a fresh clone
-# rebuilds the same lore. Applied on every summarize, before any other file or provider; a
-# summary whose quest changed fails validation there and is written again.
+# rebuilds the same lore. Applied on every summarize, to every quest, before any other file or
+# provider. Each line is stamped with the version of the quest it was written for and applies
+# only to that version: a quest that changed since gets no lore until it is written again.
 SUMMARIES_DIR = ROOT / "pipeline" / "llm" / "summaries"
 
 PROVIDERS = ("none", "batch", "direct", "file")
 NEWLINE = chr(10)
+# Refuse an export that would lose more than this share of the lore shipped now.
+LORE_DROP_LIMIT = 0.10
 
 
 def _say(text: str = "") -> None:
     print(text, flush=True)
+
+
+def _shown(path: Path) -> str:
+    """A path for a message: relative to the repository when it is inside it."""
+    try:
+        return str(Path(path).resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _quests(count: int) -> str:
+    return f"{count} quest" + ("" if count == 1 else "s")
+
+
+def _stats(stats: dict) -> str:
+    return ", ".join(f"{key} {value}" for key, value in stats.items())
 
 
 def _structure_build(conn) -> str | None:
@@ -44,13 +64,21 @@ def _structure_build(conn) -> str | None:
     return row["build"] if row is not None else None
 
 
+def _version_order(path: Path) -> tuple:
+    """Digit runs compare as numbers, so `..._v1.0.10.jsonl` comes after `..._v1.0.6.jsonl`."""
+    parts = re.split(r"(\d+)", path.name)
+    return tuple((0, int(p), "") if p.isdigit() else (1, 0, p.lower()) for p in parts) + (path.name,)
+
+
 def _summary_files(paths: list[str]) -> list[Path]:
-    """Files as given; a folder means every *.jsonl in it, sorted by name."""
+    """Files as given; a folder means every *.jsonl in it, in version order. A later file's
+    line beats an earlier one's for the same version of a quest, which is how a folder of
+    corrections overrides a folder of first drafts."""
     files: list[Path] = []
     for raw in paths:
         path = Path(raw)
         if path.is_dir():
-            files += sorted(path.glob("*.jsonl"))
+            files += sorted(path.glob("*.jsonl"), key=_version_order)
         elif path.exists():
             files.append(path)
         else:
@@ -58,22 +86,14 @@ def _summary_files(paths: list[str]) -> list[Path]:
     return files
 
 
-def _merged_summaries(paths: list[str]) -> Path:
-    """One JSONL from several. A later file replaces an earlier one's line for the same
-    quest, which is how a folder of corrections overrides a folder of first drafts."""
-    files = _summary_files(paths)
-    if len(files) == 1:
-        return files[0]
-    merged: dict[int, dict] = {}
-    for path in files:
-        merged.update(providers.read_summary_lines(path))
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / "summaries_merged.jsonl"
-    with out.open("w", encoding="utf-8", newline=NEWLINE) as handle:
-        for quest_id in sorted(merged):
-            handle.write(json.dumps({"id": quest_id, **merged[quest_id]}, ensure_ascii=False) + NEWLINE)
-    _say(f"  merged {len(files)} files, {len(merged)} quests -> {out.relative_to(ROOT)}")
-    return out
+def _report_lines(provider: providers.FileProvider) -> None:
+    """Say which quests had lines in the files that did not count, and what to do about it."""
+    if provider.stale:
+        _say(f"  not applied, written for another version of the quest: {_quests(len(provider.stale))} "
+             "(`requests` lists them for a writer)")
+    if provider.unstamped:
+        _say(f"  not applied, no stamp: {_quests(len(provider.unstamped))} "
+             "(`check --stamp` stamps the lines that pass)")
 
 
 def _ids(value: str | None) -> list[int] | None:
@@ -115,6 +135,9 @@ def _make_provider(args):
 
 def step_summarize(conn, args) -> None:
     _say(f"== summarize: provider {args.provider}, prompt {args.prompt_version}")
+    if args.provider == "file" and not args.summaries_file:
+        raise SystemExit("--provider file needs --summaries-file")
+    paid = args.provider in ("batch", "direct")
     forgotten: list[int] = []
     if args.retry_rejected:
         forgotten = [r[0] for r in conn.execute(
@@ -123,27 +146,34 @@ def step_summarize(conn, args) -> None:
         conn.execute("DELETE FROM summaries WHERE status = 'rejected' AND prompt_version = ?",
                      (args.prompt_version,))
         conn.commit()
-        _say(f"  forgot {len(forgotten)} rejected summaries so they are requested again")
-    if args.provider == "file" and not args.summaries_file:
-        raise SystemExit("--provider file needs --summaries-file")
-    files = [str(path) for path in sorted(SUMMARIES_DIR.glob("*.jsonl"))]
-    if args.provider == "file":
-        files += args.summaries_file
-    run = dict(prompt_version=args.prompt_version, ids=_ids(args.ids), limit=args.limit,
-               max_retries=args.max_retries, no_replay=forgotten)
-    if files:
-        stats = summarize.run(conn, providers.FileProvider(_merged_summaries(files)), **run)
-        _say(f"  written summaries ({len(files)} files): "
-             + ", ".join(f"{key} {value}" for key, value in stats.items()))
+        _say(f"  forgot {len(forgotten)} rejected summaries so they are requested again"
+             + (" from the provider, not from the same committed text" if paid and forgotten else ""))
+    common = dict(prompt_version=args.prompt_version, max_retries=args.max_retries)
+    committed = _summary_files([str(SUMMARIES_DIR)]) if SUMMARIES_DIR.is_dir() else []
+    if committed:
+        # Every quest on every run: --ids and --limit choose what a writer or a paid provider is
+        # asked for, never which written summaries count. Each line applies only to the version
+        # of the quest it was written for (its stamp).
+        provider = providers.FileProvider(committed, require_stamp=True)
+        stats = summarize.run(conn, provider, exclude=forgotten if paid else (), **common)
+        _say(f"  committed summaries ({len(committed)} files): {_stats(stats)}")
+        _report_lines(provider)
     else:
         pinned = summarize.apply_overrides(conn, args.prompt_version)
         _say(f"  {len(pinned)} pinned overrides applied")
-    if args.provider in ("none", "file"):
+    asked = dict(ids=_ids(args.ids), limit=args.limit, **common)
+    if args.provider == "file":
+        files = _summary_files(args.summaries_file)
+        provider = providers.FileProvider(files)
+        stats = summarize.run(conn, provider, **asked)
+        _say(f"  --summaries-file ({len(files)} files): {_stats(stats)}")
+        _report_lines(provider)
+    if not paid:
         _say("  Quests no file covers export rule-based tasks only. `requests` dumps them for a "
              "writer; --provider batch writes them with the API.")
         return
-    stats = summarize.run(conn, _make_provider(args), **run)
-    _say("  " + ", ".join(f"{key} {value}" for key, value in stats.items()))
+    stats = summarize.run(conn, _make_provider(args), no_replay=forgotten, **asked)
+    _say(f"  {_stats(stats)}")
 
 
 def _shipped_count() -> int | None:
@@ -154,6 +184,14 @@ def _shipped_count() -> int | None:
         return None
     match = re.search(r"count = (\d+)", text)
     return int(match.group(1)) if match else None
+
+
+def _shipped_lore() -> int | None:
+    """Records with lore in the MonkeDB.lua that is there now, if any."""
+    try:
+        return export.shipped_lore((DATA_DIR / export.DB_FILE).read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 
 def step_export(conn, args) -> int:
@@ -170,8 +208,18 @@ def step_export(conn, args) -> int:
         _say(f"  refusing to export: {total} quests now against {shipped} records shipped before. "
              "Pass --force if that is intended.")
         return 1
-    result = export.write(conn, DATA_DIR, build=build, prompt_version=args.prompt_version)
+    rendered = export.render(conn, build=build, prompt_version=args.prompt_version)
+    lore, shipped_lore = export.lore_count(rendered.result), _shipped_lore()
+    # Nor must lost summaries quietly turn lore into rule-based tasks for players: stale stamps
+    # after a release bump, a new prompt version or a missing summaries folder all do that.
+    if shipped_lore and lore < shipped_lore * (1 - LORE_DROP_LIMIT) and not args.force:
+        _say(f"  refusing to export: {lore} records with lore against {shipped_lore} shipped before "
+             f"({shipped_lore - lore} would lose theirs). Pass --force if that is intended.")
+        return 1
+    result = export.save(rendered, DATA_DIR)
     _say(export.format_coverage(result))
+    if shipped_lore is not None and lore != shipped_lore:
+        _say(f"  records with lore: {shipped_lore} shipped before, {lore} now")
     return 0
 
 
@@ -182,21 +230,25 @@ def step_coverage(conn, args) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / "missing_lore.txt"
     path.write_text("\n".join(str(i) for i in missing) + ("\n" if missing else ""), encoding="utf-8")
-    _say(f"  missing-lore backlog: {len(missing)} ids -> {path.relative_to(ROOT)}")
+    _say(f"  missing-lore backlog: {len(missing)} ids -> {_shown(path)}")
 
 
 def step_review(conn, args) -> None:
     path = OUT_DIR / "review.md"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     count = review.write_sample(conn, path, seed=args.seed, prompt_version=args.prompt_version)
-    _say(f"== review: {count} quests -> {path.relative_to(ROOT)} (read this before a release)")
+    _say(f"== review: {count} quests -> {_shown(path)} (read this before a release)")
 
 
 # ------------------------------------------------------------- helpers for outside writers
 
 
 def step_requests(conn, args) -> None:
-    """Dump what a summary writer needs, for writers that are not an API call."""
+    """Dump what a summary writer needs, for writers that are not an API call.
+
+    Each record carries the stamp of the quest as it is now (prompt_version, text_hash,
+    context_hash). The writer copies it into its answer line; `check` verifies it, or adds it
+    with `--stamp`, and a committed line applies only to the version of the quest it names."""
     ids = set(_ids(args.ids) or [])
     rejected_only = args.rejected
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,13 +259,16 @@ def step_requests(conn, args) -> None:
         ctx = summarize.load_context(conn, quest)
         if not ctx.has_prose():
             continue
-        cached = summarize.get_summary(conn, quest["id"], quest["text_hash"], args.prompt_version)
+        stamp = providers.Stamp(args.prompt_version, quest["text_hash"], ctx.fingerprint())
+        # The export's rule: a row written for other objectives or another turn-in is stale.
+        cached = summarize.get_summary(conn, quest["id"], quest["text_hash"], args.prompt_version,
+                                       stamp.context_hash)
         if rejected_only:
             if cached is None or cached["status"] != "rejected":
                 continue
         elif cached is not None and cached["status"] in ("ok", "rejected"):
             continue
-        record = {"id": quest["id"], "request": summarize.build_user_message(ctx)}
+        record = {"id": quest["id"], **stamp.as_dict(), "request": summarize.build_user_message(ctx)}
         if rejected_only:
             record["previous_output"] = cached["json"]
             record["errors"] = json.loads(cached["errors"] or "[]")
@@ -240,31 +295,64 @@ def step_requests(conn, args) -> None:
     _say(f"== requests: {len(records)} quests -> {out}")
 
 
+def _stamp_lines(path: Path, stamps: dict[int, tuple[int, providers.Stamp, dict]]) -> None:
+    """Write `path` again with a stamp added to the lines numbered in `stamps`; every other line
+    is kept as it was. Lines are numbered the way providers.iter_summary_lines reads them."""
+    with path.open(encoding="utf-8") as handle:
+        lines = list(handle)
+    for number, (quest_id, stamp, summary) in stamps.items():
+        ending = NEWLINE if lines[number - 1].endswith(NEWLINE) else ""
+        lines[number - 1] = json.dumps({"id": quest_id, **stamp.as_dict(), **summary},
+                                       ensure_ascii=False) + ending
+    part = path.with_name(path.name + ".part")
+    part.write_bytes("".join(lines).encode("utf-8"))
+    os.replace(part, path)
+
+
 def step_check(conn, args) -> int:
-    """Validate a summaries JSONL without storing anything. One JSON line per failing quest."""
-    from .validate import load_context, validate
+    """Validate summaries JSONL against the quests as they are now; the database is not touched.
+    One JSON line per failing quest.
 
-    from .validate import sentence_initial_capitals
+    A stamped line must have been written for the quest as it is now; of several lines for one
+    quest, the one `summarize` would apply is checked. A writer's output becomes committable
+    either way: `--stamp` gives every passing line without a stamp the quest's current one, in
+    place, and `--out FILE` writes each passing quest's line, stamped, to one new file."""
+    from .validate import load_context, sentence_initial_capitals, validate
 
-    summaries = providers.read_summary_lines(_merged_summaries(args.summaries_file))
+    files = _summary_files(args.summaries_file)
+    provider = providers.FileProvider(files)
+    lines = [line for quest_id in provider.quest_ids() for line in provider.lines_for(quest_id)]
     failed = 0
     suspects: dict[str, list[int]] = {}
     lowercase_seen: set[str] = set()
-    for summary in summaries.values():
+    for line in lines:
+        summary = line.summary
         for text in [summary.get("lore_monke", ""), summary.get("lore_plain", ""),
                      summary.get("group_line") or ""] + list(summary.get("tasks") or []):
             lowercase_seen.update(w for w in re.findall(r"[a-z][a-z']*", str(text)))
-    for quest_id, summary in sorted(summaries.items()):
+    to_stamp: dict[Path, dict[int, tuple[int, providers.Stamp, dict]]] = {}
+    passing: dict[int, tuple[providers.Stamp, dict]] = {}
+    for quest_id in provider.quest_ids():
         quest = conn.execute("SELECT * FROM quests WHERE id = ?", (quest_id,)).fetchone()
         if quest is None:
             errors = ["unknown quest id"]
         else:
             ctx = load_context(conn, quest)
-            errors = validate(summary, ctx)
-            if not errors:
-                for word in sentence_initial_capitals(summary, ctx):
-                    if word.lower() not in lowercase_seen:
-                        suspects.setdefault(word, []).append(quest_id)
+            now = providers.Stamp(args.prompt_version, quest["text_hash"], ctx.fingerprint())
+            line = provider.pick(quest_id, now)
+            if line is None:
+                newest = provider.lines_for(quest_id)[-1]
+                errors = [f"Written for another version of the quest ({'; '.join(newest.stamp.differences(now))}), "
+                          f"in {newest.file}:{newest.number}. Write it again from `requests`."]
+            else:
+                errors = validate(line.summary, ctx)
+                if not errors:
+                    for word in sentence_initial_capitals(line.summary, ctx):
+                        if word.lower() not in lowercase_seen:
+                            suspects.setdefault(word, []).append(quest_id)
+                    passing[quest_id] = (now, line.summary)
+                    if line.stamp is None:
+                        to_stamp.setdefault(line.path, {})[line.number] = (quest_id, now, line.summary)
         if errors:
             failed += 1
             _say(json.dumps({"id": quest_id, "errors": errors}, ensure_ascii=False))
@@ -272,7 +360,24 @@ def step_check(conn, args) -> int:
         listed = ", ".join(f"{w} ({', '.join(map(str, ids[:5]))})" for w, ids in sorted(suspects.items()))
         _say(f"== words to eyeball (capitalised at a sentence start, never seen in lower case, "
              f"not in the quest text; invented names hide here): {listed}")
-    _say(f"== check: {len(summaries)} summaries, {failed} failed")
+    unstamped = sum(len(numbers) for numbers in to_stamp.values())
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        part = out.with_name(out.name + ".part")
+        part.write_bytes("".join(
+            json.dumps({"id": quest_id, **stamp.as_dict(), **summary}, ensure_ascii=False) + NEWLINE
+            for quest_id, (stamp, summary) in sorted(passing.items())).encode("utf-8"))
+        os.replace(part, out)
+        _say(f"== wrote {len(passing)} passing summaries, stamped, to {_shown(out)}")
+    if args.stamp:
+        for path, stamps in to_stamp.items():
+            _stamp_lines(path, stamps)
+        _say(f"== stamped {unstamped} lines in {len(to_stamp)} files")
+    elif unstamped and not args.out:
+        _say(f"== {unstamped} passing lines have no stamp; `check --stamp` or `--out` adds it (a "
+             "committed line without one is never applied)")
+    _say(f"== check: {len(provider.quest_ids())} summaries, {failed} failed")
     return 1 if failed else 0
 
 
@@ -323,9 +428,13 @@ def build_parser() -> argparse.ArgumentParser:
     requests.add_argument("--chunk-size", type=int, help="split into chunk_NNN.jsonl files of this size")
     requests.add_argument("--rejected", action="store_true",
                           help="only rejected quests, with the validator errors and previous output")
-    check = sub.add_parser("check", help="validate a summaries JSONL; stores nothing")
+    check = sub.add_parser("check", help="validate a summaries JSONL against the quests as they are now")
     add_common(check)
     check.add_argument("--summaries-file", action="append", required=True)
+    check.add_argument("--stamp", action="store_true",
+                       help="write the quest's current stamp into every passing line that has none, in place")
+    check.add_argument("--out", help="write each passing quest's line, stamped, to this file: the "
+                                     "file to add to pipeline/llm/summaries/")
     return parser
 
 

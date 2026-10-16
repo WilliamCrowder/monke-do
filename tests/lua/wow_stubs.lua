@@ -66,7 +66,7 @@ local function newFontString(text)
         return height
     end
     -- 6 px per character; colour codes take no room, as on the real client.
-    function fs:GetStringWidth()
+    function fs:GetUnboundedStringWidth()
         local plain = (self.text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
         local widest = 0
         for line in (plain .. "\n"):gmatch("(.-)\n") do
@@ -74,7 +74,14 @@ local function newFontString(text)
         end
         return widest
     end
-    fs.GetUnboundedStringWidth = fs.GetStringWidth -- the fake never cuts, so both agree
+    -- A line wider than its fontstring is cut ("..."), and this answers the cut width.
+    function fs:GetStringWidth()
+        local widest = self:GetUnboundedStringWidth()
+        if self.width and self.width > 0 and widest > self.width then
+            return self.width
+        end
+        return widest
+    end
     function fs:SetTextColor(r, g, b, a)
         self.color = { r, g, b, a }
     end
@@ -398,6 +405,7 @@ local OWNED = {
     -- Now line and Monke pick
     "C_SuperTrack", "C_Timer", "GetTime", "InCombatLockdown", "UIParent", "ObjectiveTrackerFrame",
     "PlaySound", "SOUNDKIT", "issecretvalue", "QuestMapFrame_OpenToQuestDetails", "PlaySoundFile",
+    "StopSound",
     "MonkeDo_Pick", "BINDING_NAME_MONKEDO_PICK", "MonkeDoNowFrame", "MonkeDoListFrame",
     -- the Now line's arrow
     "C_Map", "GetPlayerFacing", "GetQuestUiMapID", "CreateVector2D",
@@ -420,6 +428,7 @@ function WowStubs.reset()
     WowStubs.sounds = {}
     WowStubs.soundFiles = {}     -- PlaySoundFile calls: { path, channel }
     WowStubs.soundFilesMissing = false
+    WowStubs.stoppedSounds = {} -- StopSound(handle) calls, the handles in order
     WowStubs.openedQuest = nil  -- last QuestMapFrame_OpenToQuestDetails(questID)
     WowStubs.instantQuestText = false -- the instantQuestText CVar; off means the description fades in
     -- Where the player is: a map, a spot on it (x east, y south, 0..1) and facing (0 north,
@@ -560,14 +569,17 @@ function WowStubs.reset()
                 return way[1], way[2], way[3]
             end
         end,
-        -- entry.marker = { mapID, x, y }: the quest's map marker, listed on that map only.
+        -- entry.marker = { mapID, x, y, indicator = bool }: the quest's map marker, listed on that
+        -- map only. entry.markers holds several.
         GetQuestsOnMap = function(mapID)
             local markers = {}
             for _, entry in ipairs(WowStubs.log) do
-                local m = entry.marker
-                if m and m[1] == mapID then
-                    markers[#markers + 1] = { questID = entry.questID, mapID = m[1], x = m[2], y = m[3],
-                        numObjectives = #(entry.objectives or {}), isQuestStart = false, isDaily = false }
+                for _, m in ipairs(entry.markers or { entry.marker }) do
+                    if m[1] == mapID then
+                        markers[#markers + 1] = { questID = entry.questID, mapID = m[1], x = m[2], y = m[3],
+                            numObjectives = #(entry.objectives or {}), isQuestStart = false, isDaily = false,
+                            isMapIndicatorQuest = m.indicator or false }
+                    end
                 end
             end
             return markers
@@ -595,7 +607,8 @@ function WowStubs.reset()
     end
     GetQuestUiMapID = function(questID)
         local entry = entryFor(questID)
-        return entry and entry.marker and entry.marker[1] or 0
+        local m = entry and (entry.marker or (entry.markers and entry.markers[1]))
+        return m and m[1] or 0
     end
     GetPlayerFacing = function()
         if WowStubs.player.mapID then
@@ -627,17 +640,24 @@ function WowStubs.reset()
                 return { mapID = mapID, name = map.name, mapType = 3, parentMapID = map.parent or 0, flags = 0 }
             end
         end,
+        -- World positions as the real client gives them: X grows north, Y grows west. The fake
+        -- maps keep their corner as east (left) and south (top) offsets, so X = -(south), Y = -(east).
         GetWorldPosFromMapPos = function(mapID, position)
             local map = WowStubs.maps[mapID]
             if map then
-                return map.continent, CreateVector2D(map.left + position.x * map.width, map.top + position.y * map.height)
+                return map.continent, CreateVector2D(-(map.top + position.y * map.height),
+                    -(map.left + position.x * map.width))
             end
         end,
+        -- Only answers for a spot on that map, like GetPlayerMapPosition.
         GetMapPosFromWorldPos = function(continent, world, overrideMapID)
             local map = WowStubs.maps[overrideMapID]
             if map and map.continent == continent then
-                return overrideMapID,
-                    CreateVector2D((world.x - map.left) / map.width, (world.y - map.top) / map.height)
+                local x = (-world.y - map.left) / map.width
+                local y = (-world.x - map.top) / map.height
+                if x >= 0 and x <= 1 and y >= 0 and y <= 1 then
+                    return overrideMapID, CreateVector2D(x, y)
+                end
             end
         end,
     }
@@ -699,7 +719,13 @@ function WowStubs.reset()
     -- plays that case.
     PlaySoundFile = function(path, channel)
         table.insert(WowStubs.soundFiles, { path = path, channel = channel })
-        return not WowStubs.soundFilesMissing
+        if WowStubs.soundFilesMissing then
+            return false
+        end
+        return true, #WowStubs.soundFiles -- willPlay, soundHandle
+    end
+    StopSound = function(handle)
+        table.insert(WowStubs.stoppedSounds, handle)
     end
     issecretvalue = function()
         return false

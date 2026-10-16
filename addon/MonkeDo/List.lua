@@ -218,11 +218,45 @@ local function updateTicker()
     end
 end
 
+-- Under the mouse the lines keep their places: quests already shown keep their order and new
+-- ones go after them, so a click lands on the quest the tooltip names. Any redraw goes through
+-- here (the ticker, quest log updates, a pick, a settings change).
+local shownOrder = {}
+
+local function holdOrder(ordered)
+    local place = {}
+    for index, questID in ipairs(shownOrder) do
+        place[questID] = index
+    end
+    local kept, added = {}, {}
+    for _, quest in ipairs(ordered) do
+        if place[quest.questID] then
+            kept[#kept + 1] = quest
+        else
+            added[#added + 1] = quest
+        end
+    end
+    table.sort(kept, function(a, b)
+        return place[a.questID] < place[b.questID]
+    end)
+    for _, quest in ipairs(added) do
+        kept[#kept + 1] = quest
+    end
+    return kept
+end
+
 function List.Refresh()
     if not frame then
         return
     end
     local ordered = wanted() and List.Order(Pick.Candidates()) or {}
+    if hovered() then
+        ordered = holdOrder(ordered)
+    end
+    shownOrder = {}
+    for index, quest in ipairs(ordered) do
+        shownOrder[index] = quest.questID
+    end
     if #ordered == 0 then
         frame:Hide()
     else

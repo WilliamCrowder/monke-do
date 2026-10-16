@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -42,6 +43,63 @@ SUMMARY_SCHEMA: dict[str, Any] = {
 }
 
 
+# --------------------------------------------------------------------------- stamps
+
+# What a summary line was written for, stored in the line beside the four summary keys and
+# stripped before validation. The names are the `summaries` table's columns.
+STAMP_KEYS = ("prompt_version", "text_hash", "context_hash")
+_HASH = re.compile(r"[0-9a-f]{16}")
+
+
+@dataclass(frozen=True)
+class Stamp:
+    """The version of a quest a summary was written for: the prompt version, the quest's text
+    hash (db.text_hash) and the fingerprint of everything the writer was shown
+    (QuestContext.fingerprint). `requests` hands it to a writer; a line that carries it answers
+    only a request for the same version of the quest."""
+
+    prompt_version: str
+    text_hash: str
+    context_hash: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {key: getattr(self, key) for key in STAMP_KEYS}
+
+    def differences(self, now: Stamp) -> list[str]:
+        """How the quest as it is `now` differs from the version this stamp names, in words."""
+        out = []
+        if self.prompt_version != now.prompt_version:
+            out.append(f"prompt {self.prompt_version}, not {now.prompt_version}")
+        if self.text_hash != now.text_hash:
+            out.append("other quest text")
+        elif self.context_hash != now.context_hash:
+            out.append("other objectives, turn-in or group data")
+        return out
+
+
+def stamp_of(record: dict, where: str = "") -> Stamp | None:
+    """The stamp in a summary line, or None for a line without one. Part of a stamp, or a value
+    unlike what `requests` writes, is an error naming `where` (a "path:line: " prefix)."""
+    present = [key for key in STAMP_KEYS if key in record]
+    if not present:
+        return None
+    if len(present) != len(STAMP_KEYS):
+        missing = [key for key in STAMP_KEYS if key not in record]
+        raise ValueError(f"{where}a stamp needs {', '.join(STAMP_KEYS)}; this line lacks {', '.join(missing)}")
+    version, text_hash, context_hash = (record[key] for key in STAMP_KEYS)
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError(f"{where}prompt_version must be a non-empty string")
+    for key, value in (("text_hash", text_hash), ("context_hash", context_hash)):
+        if not isinstance(value, str) or not _HASH.fullmatch(value):
+            raise ValueError(f"{where}{key} must be 16 lower-case hex digits, as `requests` writes it")
+    return Stamp(version, text_hash, context_hash)
+
+
+def strip_stamp(record: dict) -> dict:
+    """The line without its stamp: what the validator sees."""
+    return {key: value for key, value in record.items() if key not in STAMP_KEYS}
+
+
 # --------------------------------------------------------------------------- requests
 
 
@@ -59,6 +117,7 @@ class SummaryRequest:
     system: str
     user: str
     feedback: Feedback | None = None
+    stamp: Stamp | None = None  # the version of the quest asked about; a file answers only for it
 
     def content(self) -> str:
         """The full user turn. Feedback is appended to the same turn rather than sent as
@@ -139,15 +198,13 @@ class FakeProvider:
         return out
 
 
-def read_summary_lines(path: Path, *, unique: bool = False) -> dict[int, dict]:
-    """Read `{"id": 214, "lore_monke": ..., "tasks": [...], ...}` lines into {id: summary}.
+def iter_summary_lines(path: Path) -> Iterator[tuple[int, int, dict]]:
+    """(line number, quest id, the rest of the line) for every summary line, in file order:
+    `{"id": 214, "lore_monke": ..., "tasks": [...], ...}`, optionally with a stamp.
 
-    Shared by FileProvider and the overrides file so both accept the same format.
-    Blank lines and lines starting with '#' are skipped. With `unique`, a repeated id is
-    an error (a pinned override listed twice is a mistake); otherwise the last line wins
-    (an appended correction replaces the earlier attempt).
+    Shared by FileProvider, `check` and the overrides file so all accept the same format.
+    Blank lines and lines starting with '#' are skipped.
     """
-    out: dict[int, dict] = {}
     with Path(path).open(encoding="utf-8") as handle:
         for number, line in enumerate(handle, start=1):
             line = line.strip()
@@ -159,38 +216,121 @@ def read_summary_lines(path: Path, *, unique: bool = False) -> dict[int, dict]:
             except (ValueError, KeyError, TypeError, AttributeError) as exc:
                 raise ValueError(f"{path}:{number}: expected a JSON object with an integer "
                                  f"'id' ({exc})") from exc
-            if unique and quest_id in out:
-                raise ValueError(f"{path}:{number}: quest {quest_id} is listed twice")
-            out[quest_id] = record
+            yield number, quest_id, record
+
+
+def read_summary_lines(path: Path, *, unique: bool = False) -> dict[int, dict]:
+    """Summary lines as {id: the rest of the line}. With `unique`, a repeated id is an error
+    (a pinned override listed twice is a mistake); otherwise the last line wins (an appended
+    correction replaces the earlier attempt)."""
+    out: dict[int, dict] = {}
+    for number, quest_id, record in iter_summary_lines(path):
+        if unique and quest_id in out:
+            raise ValueError(f"{path}:{number}: quest {quest_id} is listed twice")
+        out[quest_id] = record
     return out
 
 
-class FileProvider:
-    """Answers from a JSONL file produced elsewhere, for example by Claude Code subagents.
+@dataclass(frozen=True)
+class SummaryLine:
+    """One line of a summaries file: where it is, the summary it holds, and its stamp."""
 
-    A file cannot react to validator feedback, so `run` does not re-prompt it, and quests
-    missing from the file come back as NotProvided: they stay uncached and are picked up
-    by a later run once the file (or a paid provider) covers them.
+    path: Path
+    number: int
+    summary: dict  # the line without its id and its stamp
+    stamp: Stamp | None
+
+    @property
+    def file(self) -> str:
+        return self.path.name
+
+
+class FileProvider:
+    """Answers from JSONL files produced elsewhere, for example by Claude Code subagents.
+
+    A line may carry a stamp (STAMP_KEYS): the version of the quest it was written for, as
+    `requests` handed it to the writer. A stamped line answers only a request for that same
+    version, so a quest that changed since gets NotProvided, never text written for its old
+    objectives or turn-in. Of the lines that fit, the newest wins (files in the order given,
+    lines in file order): a correction file overrides first drafts, and a line written for
+    another release waits for that release. An unstamped line fits any version unless
+    `require_stamp` (the committed folder, where every line must say what it was written for).
+
+    A file cannot react to validator feedback, so `run` does not re-prompt it, and quests no
+    line fits come back as NotProvided: they stay uncached and are picked up by a later run
+    once a file (or a paid provider) covers them. `stale` and `unstamped` collect the quests
+    that had lines but none that fit, for the CLI to report.
     """
 
     paid = False
     supports_feedback = False
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
-        self.model = f"file:{self.path.name}"
-        self._summaries = read_summary_lines(self.path)
+    def __init__(self, paths: str | Path | Iterable[str | Path], *, require_stamp: bool = False) -> None:
+        self.paths = [Path(paths)] if isinstance(paths, (str, Path)) else [Path(p) for p in paths]
+        if not self.paths:
+            raise ValueError("FileProvider needs at least one file")
+        self.require_stamp = require_stamp
+        self.model = "file:" + "+".join(path.name for path in self.paths)
+        self._lines: dict[int, list[SummaryLine]] = {}
+        for path in self.paths:
+            for number, quest_id, record in iter_summary_lines(path):
+                stamp = stamp_of(record, f"{path}:{number}: ")
+                self._lines.setdefault(quest_id, []).append(
+                    SummaryLine(path, number, strip_stamp(record), stamp))
+        self._answered: dict[int, SummaryLine] = {}
+        self.stale: set[int] = set()
+        self.unstamped: set[int] = set()
+
+    def quest_ids(self) -> list[int]:
+        return sorted(self._lines)
+
+    def lines_for(self, quest_id: int) -> list[SummaryLine]:
+        """Every line for the quest, oldest first."""
+        return list(self._lines.get(quest_id, ()))
+
+    def pick(self, quest_id: int, stamp: Stamp | None) -> SummaryLine | None:
+        """The newest line written for this version of the quest, or None."""
+        for line in reversed(self._lines.get(quest_id, ())):
+            if line.stamp is None:
+                if not self.require_stamp:
+                    return line
+            elif line.stamp == stamp:
+                return line
+        return None
+
+    def offer(self, quest_id: int, stamp: Stamp | None) -> dict | None:
+        """The summary this provider would answer with, without answering (summarize.run uses
+        it to tell whether a cached row is still what the files say)."""
+        line = self.pick(quest_id, stamp)
+        return dict(line.summary) if line is not None else None
+
+    def model_for(self, quest_id: int) -> str:
+        """`file:<name>` of the file whose line answered the quest."""
+        line = self._answered.get(quest_id)
+        return f"file:{line.file}" if line is not None else self.model
 
     def summarize_many(self, requests: list[SummaryRequest]) -> dict[int, Result]:
         out: dict[int, Result] = {}
         for request in requests:
-            summary = self._summaries.get(request.quest_id)
-            if summary is None or request.feedback is not None:
-                out[request.quest_id] = NotProvided(
-                    f"quest {request.quest_id} not provided by {self.path.name}")
-            else:
-                out[request.quest_id] = json.dumps(summary, ensure_ascii=False)
+            line = None if request.feedback is not None else self.pick(request.quest_id, request.stamp)
+            if line is None:
+                out[request.quest_id] = NotProvided(self._why_not(request))
+                continue
+            self._answered[request.quest_id] = line
+            out[request.quest_id] = json.dumps(line.summary, ensure_ascii=False)
         return out
+
+    def _why_not(self, request: SummaryRequest) -> str:
+        lines = self._lines.get(request.quest_id, ())
+        if request.feedback is not None:
+            return f"quest {request.quest_id}: a file cannot answer validator feedback"
+        if not lines:
+            return f"quest {request.quest_id} is in none of the files"
+        if all(line.stamp is None for line in lines):
+            self.unstamped.add(request.quest_id)
+            return f"quest {request.quest_id}: its lines have no stamp"
+        self.stale.add(request.quest_id)
+        return f"quest {request.quest_id}: its lines were written for another version of the quest"
 
 
 # --------------------------------------------------------------------------- Anthropic providers

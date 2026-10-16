@@ -9,8 +9,8 @@
 ## OptionalDeps: LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0
 ## AddonCompartmentFunc: MonkeDo_OnAddonCompartmentClick
 ## X-License: GPL-3.0-only
-## X-Curse-Project-ID:
-## X-Wago-ID:
+## X-Curse-Project-ID: 1747357
+## X-Wago-ID: aND9886o
 
 Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua

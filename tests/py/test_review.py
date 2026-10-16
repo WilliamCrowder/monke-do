@@ -9,6 +9,9 @@ from pipeline import db, review, validate
 from pipeline.llm import summarize
 
 
+VANILLA = frozenset(range(1, 90000))  # every low id of make_db is a vanilla quest here
+
+
 def make_db(n_vanilla: int = 30, n_new: int = 10):
     conn = db.connect()
     ids = list(range(1, n_vanilla + 1)) + list(range(90001, 90001 + n_new))
@@ -38,7 +41,7 @@ def make_db(n_vanilla: int = 30, n_new: int = 10):
 
 def test_sample_sizes_and_new_quest_share(tmp_path: Path) -> None:
     path = tmp_path / "out" / "review.md"
-    count = review.write_sample(make_db(), path, n_random=8, n_new=4, seed=1)
+    count = review.write_sample(make_db(), path, n_random=8, n_new=4, seed=1, classic_ids=VANILLA)
     text = path.read_text(encoding="utf-8")
     assert count == 12 == text.count("\n## ")
     headings = [int(line[3:].split(":")[0]) for line in text.splitlines() if line.startswith("## ")]
@@ -49,7 +52,8 @@ def test_sample_sizes_and_new_quest_share(tmp_path: Path) -> None:
 def test_same_seed_same_bytes_different_seed_different_sample(tmp_path: Path) -> None:
     conn = make_db()
     for name, seed in (("a", 3), ("b", 3), ("c", 4)):
-        review.write_sample(conn, tmp_path / f"{name}.md", n_random=5, n_new=2, seed=seed)
+        review.write_sample(conn, tmp_path / f"{name}.md", n_random=5, n_new=2, seed=seed,
+                            classic_ids=VANILLA)
     a, b, c = ((tmp_path / f"{n}.md").read_bytes() for n in "abc")
     assert a == b
     assert a != c
@@ -87,7 +91,17 @@ def test_without_any_summaries_the_sample_falls_back_to_all_quests(tmp_path: Pat
     conn = make_db(5, 0)
     conn.execute("DELETE FROM summaries")
     path = tmp_path / "review.md"
-    assert review.write_sample(conn, path, n_random=3, n_new=3) == 3
+    assert review.write_sample(conn, path, n_random=3, n_new=3, classic_ids=VANILLA) == 3
     text = path.read_text(encoding="utf-8")
     assert "no summary (rule-based fallback)" in text
     assert "- Bonk 5 Rat" in text
+
+
+def test_forever_quests_below_90000_are_sampled_as_new() -> None:
+    """New means absent from Classic Questie, not an id of 90000 or more."""
+    conn = make_db(30, 0)
+    ids = review.pick_ids(conn, n_random=0, n_new=5, seed=0, prompt_version="v1",
+                          classic_ids=set(range(1, 26)))
+    assert ids == [26, 27, 28, 29, 30]
+    path_ids = review.pick_ids(conn, n_random=0, n_new=50, seed=0, prompt_version="v1")
+    assert 2 not in path_ids and 1 in path_ids  # the committed list: quest 2 is Classic, quest 1 is not

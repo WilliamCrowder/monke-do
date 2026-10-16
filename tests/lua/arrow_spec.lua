@@ -79,6 +79,33 @@ describe("Arrow", function()
             near(math.atan2(-1900, -1000), Arrow.Turn(214))
         end)
 
+        it("at a waypoint on a neighbouring map, off the player's map", function()
+            quest({ 1412, 0.6, 0.5 }, { nextWaypoint = { 1413, 0.1, 0.5 } })
+            near(math.atan2(-1900, -1000), Arrow.Turn(214))
+        end)
+
+        it("at the marker on the player's own map before one elsewhere, never at a map indicator", function()
+            quest(nil, { markers = { { 1413, 0.1, 0.5 }, { 1412, 0.6, 0.5 } } })
+            near(-PI / 2, Arrow.Turn(214)) -- Mulgore's own marker, due east
+            Arrow.Forget()
+            WowStubs.log = {}
+            quest(nil, { markers = { { 1413, 0.1, 0.5 }, { 1412, 0.5, 0.4, indicator = true } } })
+            near(math.atan2(-1900, -1000), Arrow.Turn(214)) -- the indicator is passed over
+        end)
+
+        it("follows the player onto another map", function()
+            quest({ 1413, 0.1, 0.5 })
+            near(math.atan2(-1900, -1000), Arrow.Turn(214))
+            WowStubs.player.mapID, WowStubs.player.x, WowStubs.player.y = 1413, 0.05, 0.5
+            near(-PI / 2, Arrow.Turn(214)) -- now 200 yards due east, on the same map
+        end)
+
+        it("nowhere in an instance, where the game names the map but gives no position or facing", function()
+            quest({ 1412, 0.6, 0.5 })
+            WowStubs.player.mapID, WowStubs.player.x, WowStubs.player.facing = 1438, nil, nil
+            assert.is_nil(Arrow.Turn(214))
+        end)
+
         it("finds a marker listed on a map above the player's", function()
             _G.GetQuestUiMapID = nil
             -- Kalimdor 0.5, 0.4 is world 2000, 0: 500 east and 1000 north of the player.

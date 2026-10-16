@@ -6,7 +6,9 @@
 -- Everything is done on the player's own map, where x grows to the east and y to the south,
 -- scaled to yards by the map's world size. The spot is the game's next waypoint (a boat, a
 -- portal) when there is one, else the quest's map marker. A spot on another map is carried onto
--- the player's map through world coordinates, on the same continent only. GetPlayerFacing gives
+-- the player's map through world coordinates, on the same continent only: the player's map is an
+-- axis-aligned rectangle in the world, and its own corners say how its x and y run there, so no
+-- world axis convention is assumed and a spot off the map simply lands outside 0..1. GetPlayerFacing gives
 -- 0 for north, growing counter-clockwise. Inside instances the game gives no position or facing,
 -- so there is no arrow there. Reads game state only; it draws nothing.
 
@@ -71,8 +73,8 @@ function Arrow.Rotation(dEast, dSouth, facing)
     return turn
 end
 
--- The maps to look for the quest's marker on: the quest's own, the player's, and the ones
--- above the player's.
+-- The maps to look for the quest's marker on: the player's (the marker nearest to hand, as
+-- Blizzard's own map shows it), the quest's own, and the ones above the player's.
 local function markerMaps(questID, map)
     local maps, seen = {}, {}
     local function add(mapID)
@@ -82,10 +84,10 @@ local function markerMaps(questID, map)
             maps[#maps + 1] = mapID
         end
     end
+    add(map)
     if GetQuestUiMapID then
         add(GetQuestUiMapID(questID))
     end
-    add(map)
     local up = map
     for _ = 1, PARENT_MAPS do
         local info = C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(up)
@@ -98,53 +100,72 @@ local function markerMaps(questID, map)
     return maps
 end
 
--- The quest's next spot as mapID, x, y: the game's waypoint first, else its map marker.
-local function questSpot(questID, map)
+-- The places the quest's next spot may be, best first, as { mapID, x, y }: the game's
+-- waypoint, then the quest's markers. Map indicator rows are skipped, as Blizzard's own map
+-- skips them.
+local function questSpots(questID, map)
+    local spots = {}
     if not C_QuestLog then
-        return nil
+        return spots
     end
     if C_QuestLog.GetNextWaypoint then
         local mapID, x, y = C_QuestLog.GetNextWaypoint(questID)
         mapID, x, y = number(mapID), number(x), number(y)
         if mapID and x and y then
-            return mapID, x, y
+            spots[#spots + 1] = { mapID, x, y }
         end
     end
     if not C_QuestLog.GetQuestsOnMap then
-        return nil
+        return spots
     end
     for _, mapID in ipairs(markerMaps(questID, map)) do
         local markers = C_QuestLog.GetQuestsOnMap(mapID)
         if type(markers) == "table" then
             for _, marker in ipairs(markers) do
-                if type(marker) == "table" and not Pick.IsSecret(marker.questID) and marker.questID == questID then
+                if type(marker) == "table" and not Pick.IsSecret(marker.questID) and marker.questID == questID
+                        and marker.isMapIndicatorQuest ~= true then
                     local x, y = number(marker.x), number(marker.y)
                     if x and y then
-                        return mapID, x, y
+                        spots[#spots + 1] = { mapID, x, y }
                     end
                 end
             end
         end
     end
-    return nil
+    return spots
 end
 
--- A spot on mapID carried onto `map`, through world coordinates; nil across continents.
+-- The world position of a spot on a map, as the continent and the vector's two numbers.
+local function world(mapID, x, y)
+    local continent, position = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(x, y))
+    local a, b = xy(position)
+    return number(continent), a, b
+end
+
+-- A spot on mapID carried onto `map`'s own coordinates; nil across continents. The spot's world
+-- offset from the map's (0, 0) corner is split along the map's x and y edges (Cramer's rule).
 local function onMap(mapID, x, y, map)
     if mapID == map then
         return x, y
     end
-    if not (C_Map and C_Map.GetWorldPosFromMapPos and C_Map.GetMapPosFromWorldPos and CreateVector2D) then
+    if not (C_Map and C_Map.GetWorldPosFromMapPos and CreateVector2D) then
         return nil
     end
-    local continent, world = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(x, y))
-    local here = C_Map.GetWorldPosFromMapPos(map, CreateVector2D(0.5, 0.5))
-    continent, here = number(continent), number(here)
-    if not (continent and here and continent == here and type(world) == "table") then
+    local continent, wa, wb = world(mapID, x, y)
+    local here, oa, ob = world(map, 0, 0)
+    local _, xa, xb = world(map, 1, 0)
+    local _, ya, yb = world(map, 0, 1)
+    if not (continent and here and continent == here and wa and oa and xa and ya) then
         return nil
     end
-    local _, position = C_Map.GetMapPosFromWorldPos(continent, world, map)
-    return xy(position)
+    local ua, ub = xa - oa, xb - ob -- the world step for map x 0 -> 1
+    local va, vb = ya - oa, yb - ob -- and for map y 0 -> 1
+    local det = ua * vb - ub * va
+    if det == 0 then
+        return nil
+    end
+    local da, db = wa - oa, wb - ob
+    return (da * vb - db * va) / det, (ua * db - ub * da) / det
 end
 
 -- The quest's spot on the player's map `map`, with that map's size in yards, or nil.
@@ -158,15 +179,13 @@ function Arrow.Target(questID, map)
     if not (width and height and width > 0 and height > 0) then
         return nil
     end
-    local spotMap, spotX, spotY = questSpot(questID, map)
-    if not spotMap then
-        return nil
+    for _, spot in ipairs(questSpots(questID, map)) do
+        local x, y = onMap(spot[1], spot[2], spot[3], map)
+        if x and y then
+            return { questID = questID, map = map, x = x, y = y, width = width, height = height }
+        end
     end
-    local x, y = onMap(spotMap, spotX, spotY, map)
-    if not (x and y) then
-        return nil
-    end
-    return { questID = questID, map = map, x = x, y = y, width = width, height = height }
+    return nil
 end
 
 -- Look the spot up again on the next turn (the quest moved on, or a second went by).

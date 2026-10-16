@@ -9,6 +9,7 @@ expected to be non-empty. It is the to-do list for the next source.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Collection
 
 from pipeline import db
 
@@ -34,16 +35,20 @@ def _line(label: str, value: int | str, indent: int = 0) -> str:
     return f"{label:<{_LABEL_WIDTH}}{value:>8}"
 
 
-def report(conn: sqlite3.Connection) -> str:
-    """The whole report as one string. Reads only; call after `resolve_quests`."""
-    threshold = db.NEW_ID_THRESHOLD
-    total = _count(conn, "SELECT COUNT(*) FROM quests")
+def report(conn: sqlite3.Connection, classic_ids: Collection[int] | None = None) -> str:
+    """The whole report as one string. Reads only; call after `resolve_quests`.
+
+    Vanilla quests are the ones in Classic Questie (`classic_ids`, default the committed list);
+    every other quest is new in Forever, whatever its ID."""
+    classic = classic_ids if classic_ids is not None else db.classic_quest_ids()
+    ids = [row[0] for row in conn.execute("SELECT id FROM quests")]
+    new = sum(1 for quest_id in ids if db.is_new_quest(quest_id, classic))
     lines = [
         "Monke Do coverage",
         "=================",
-        _line("Quests with text", total),
-        _line(f"vanilla (id < {threshold})", _count(conn, "SELECT COUNT(*) FROM quests WHERE id < ?", threshold), 2),
-        _line(f"new (id >= {threshold})", _count(conn, "SELECT COUNT(*) FROM quests WHERE id >= ?", threshold), 2),
+        _line("Quests with text", len(ids)),
+        _line("vanilla (in Classic Questie)", len(ids) - new, 2),
+        _line("new in Forever", new, 2),
         "",
         "Rows per source",
     ]

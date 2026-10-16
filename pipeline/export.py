@@ -9,7 +9,10 @@ MonkeDB.lua between releases shows exactly which quests changed.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -120,24 +123,30 @@ def _record_line(quest_id: int, record: dict) -> str:
     return f"  [{quest_id}] = {{ " + ", ".join(parts) + " },\n"
 
 
-def _bucket(quest_id: int) -> str:
-    return "vanilla" if quest_id < db.NEW_ID_THRESHOLD else "new"
+@dataclass
+class Rendered:
+    """Both files' text and the coverage split, before anything is written."""
+
+    db_text: str
+    meta_text: str
+    result: dict
 
 
-def write(
+def render(
     conn: sqlite3.Connection,
-    out_dir: Path,
     *,
     build: str,
     generated: str | None = None,
     prompt_version: str = "v1",
-) -> dict:
-    """Write MonkeDB.lua and MonkeDB_Meta.lua into `out_dir` and return the coverage split.
+    classic_ids: Collection[int] | None = None,
+) -> Rendered:
+    """MonkeDB.lua and MonkeDB_Meta.lua as text, with the coverage split.
 
     Coverage is what the plan asks each release to report: quests with lore, with tasks
-    only, and title only (not exported), each split into vanilla ids (< 90000) and
-    Forever-new ids (>= 90000).
+    only, and title only (not exported), each split into vanilla quests (in Classic Questie,
+    `classic_ids` or the committed list) and quests new in Forever (the rest, whatever their id).
     """
+    classic = classic_ids if classic_ids is not None else db.classic_quest_ids()
     coverage = {name: {"vanilla": 0, "new": 0} for name in ("lore", "tasks_only", "title_only")}
     lines = [HEADER, "MonkeDB = {\n"]
     count = 0
@@ -146,11 +155,12 @@ def write(
         summary = _usable_summary(
             get_summary(conn, quest["id"], quest["text_hash"], prompt_version, ctx.fingerprint()))
         record = build_record(quest, ctx.objectives, summary)
+        bucket = "new" if db.is_new_quest(quest["id"], classic) else "vanilla"
         if record is None:
-            coverage["title_only"][_bucket(quest["id"])] += 1
+            coverage["title_only"][bucket] += 1
             continue
         has_lore = bool(record.get("l") or record.get("p"))
-        coverage["lore" if has_lore else "tasks_only"][_bucket(quest["id"])] += 1
+        coverage["lore" if has_lore else "tasks_only"][bucket] += 1
         lines.append(_record_line(quest["id"], record))
         count += 1
     lines.append("}\n")
@@ -161,12 +171,44 @@ def write(
         f"generated = {lua_string(generated)}, count = {count}, "
         f"schema = {db.SCHEMA_VERSION}, prompt = {lua_string(prompt_version)} }}\n"
     )
+    return Rendered("".join(lines), meta, {"count": count, **coverage})
+
+
+def save(rendered: Rendered, out_dir: Path) -> dict:
+    """Write a rendered export into `out_dir`; returns its coverage split and the folder."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     # write_bytes, not write_text: Windows must not turn "\n" into "\r\n".
-    (out_dir / DB_FILE).write_bytes("".join(lines).encode("utf-8"))
-    (out_dir / META_FILE).write_bytes(meta.encode("utf-8"))
-    return {"count": count, "out_dir": str(out_dir), **coverage}
+    (out_dir / DB_FILE).write_bytes(rendered.db_text.encode("utf-8"))
+    (out_dir / META_FILE).write_bytes(rendered.meta_text.encode("utf-8"))
+    return {**rendered.result, "out_dir": str(out_dir)}
+
+
+def write(
+    conn: sqlite3.Connection,
+    out_dir: Path,
+    *,
+    build: str,
+    generated: str | None = None,
+    prompt_version: str = "v1",
+    classic_ids: Collection[int] | None = None,
+) -> dict:
+    """Write MonkeDB.lua and MonkeDB_Meta.lua into `out_dir` and return the coverage split."""
+    return save(render(conn, build=build, generated=generated, prompt_version=prompt_version,
+                       classic_ids=classic_ids), out_dir)
+
+
+def lore_count(result: dict) -> int:
+    """Records with lore in a coverage split."""
+    return result["lore"]["vanilla"] + result["lore"]["new"]
+
+
+_LORE_RECORD = re.compile(r'^  \[\d+\] = \{ [lp] = "', re.MULTILINE)
+
+
+def shipped_lore(db_text: str) -> int:
+    """Records with lore in a MonkeDB.lua this module wrote (`l` or `p` comes first in a record)."""
+    return len(_LORE_RECORD.findall(db_text))
 
 
 def format_coverage(result: dict) -> str:
@@ -174,7 +216,7 @@ def format_coverage(result: dict) -> str:
     rows = (("with lore", "lore"), ("tasks only", "tasks_only"),
             ("title only (not exported)", "title_only"))
     return "\n".join(
-        f"{label:<26} vanilla (<{db.NEW_ID_THRESHOLD}): {result[key]['vanilla']:>5}   "
-        f"new (>={db.NEW_ID_THRESHOLD}): {result[key]['new']:>5}"
+        f"{label:<26} vanilla (in Classic): {result[key]['vanilla']:>5}   "
+        f"new in Forever: {result[key]['new']:>5}"
         for label, key in rows
     )

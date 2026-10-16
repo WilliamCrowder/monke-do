@@ -29,6 +29,9 @@ SOURCE = "questie"
 PRIORITY = 2
 NEEDS_NETWORK = True
 OPTIONS: tuple[str, ...] = ()  # extra keyword options load() accepts (see sources.load_all)
+# Another version of the same database at the same priority: never loaded in one run with this
+# one, and its rows are purged when this one loads (see sources.load_all and load below).
+CONFLICTS: tuple[str, ...] = ("questie_forever",)
 
 KNOWN_IDS_BUILD = "questie-classic"
 BASE_URL = "https://raw.githubusercontent.com/Questie/QuestieDB/master/data/Classic/"
@@ -443,10 +446,19 @@ def _int_or_none(value: object) -> int | None:
 def load(
     conn: sqlite3.Connection, raw_dir: Path, *, offline: bool = False, fetch: Fetch = http_fetch
 ) -> db.SourceResult:
-    """Download (or reuse) the four files, then write rows, objectives, meta and known IDs."""
+    """Download (or reuse) the four files, then write rows, objectives, meta and known IDs.
+
+    The load is authoritative: rows and objectives an earlier load wrote for quests these files
+    no longer have (or have without text) are deleted, and so is everything the Forever release
+    source wrote, so the database is the same as a fresh one loaded from these files."""
+    from pipeline.sources import questie_forever  # here: questie_forever imports this module
+
     result = db.SourceResult(source=SOURCE)
     cache_dir = ensure_cache(Path(raw_dir), offline=offline, fetch=fetch, notes=result.notes)
     fetched_at = _read_manifest(cache_dir).get(QUEST_DB.filename, {}).get("fetched_at") or db.utcnow()
+    purged = db.purge_source(conn, questie_forever.SOURCE, questie_forever.KNOWN_IDS_BUILD)
+    if purged:
+        result.notes.append(f"removed {purged} rows the {questie_forever.SOURCE} source left: the two never mix")
 
     names = Names(
         npc=load_names(cache_dir / NPC_DB.filename, NPC_DB),
@@ -464,15 +476,19 @@ def load(
     last_needed = max(keys[k] for k in wanted + (("triggerEnd",) if "triggerEnd" in keys else ()))
 
     quest_ids: list[int] = []
+    written: list[int] = []
     without_text = 0
     for quest_id, row in luatable.iter_rows(body, max_index=last_needed):
         if not isinstance(quest_id, int) or not isinstance(row, dict):
             continue
         quest_ids.append(quest_id)
-        if not write_quest(conn, result, quest_id, row, keys, names, fetched_at, SOURCE):
+        if write_quest(conn, result, quest_id, row, keys, names, fetched_at, SOURCE):
+            written.append(quest_id)
+        else:
             without_text += 1
 
-    result.known_ids = db.add_known_ids(conn, quest_ids, KNOWN_IDS_BUILD)
+    note_pruned(result, *db.prune_source(conn, SOURCE, written))
+    result.known_ids = db.replace_known_ids(conn, quest_ids, KNOWN_IDS_BUILD)
     result.notes.append(
         f"{len(quest_ids)} quest IDs, {len(names.npc)} NPC, {len(names.item)} item and "
         f"{len(names.object)} object names read"
@@ -480,6 +496,36 @@ def load(
     if without_text:
         result.notes.append(f"{without_text} quests have neither a title nor objectives text; no row written")
     return result
+
+
+def write_classic_ids(cache_dir: Path, out: Path = db.CLASSIC_IDS_FILE) -> int:
+    """Rebuild the committed Classic ID list (db.CLASSIC_IDS_FILE) from a cached quest file:
+    every quest ID in it, whether or not the row has text. Returns how many IDs it holds.
+
+        uv run python -c "from pathlib import Path; from pipeline.sources import questie; \\
+            print(questie.write_classic_ids(Path('pipeline/sources/raw/questie')))"
+    """
+    cache_dir = Path(cache_dir)
+    text = (cache_dir / QUEST_DB.filename).read_text(encoding="utf-8")
+    body = luatable.extract_long_string(text, QUEST_DB.data_name)
+    ids = sorted({quest_id for quest_id, _row in luatable.iter_rows(body, max_index=1)
+                  if isinstance(quest_id, int)})
+    origin = _read_manifest(cache_dir).get(QUEST_DB.filename, {})
+    header = [
+        f"# Every quest ID in Classic Questie ({BASE_URL}{QUEST_DB.filename}),",
+        f"# sha256 {origin.get('sha256', 'unknown')}, fetched {origin.get('fetched_at', 'unknown')}: {len(ids)} IDs.",
+        "# The vanilla quests. A quest not listed here is new in Forever, whatever its ID.",
+        "# Rebuilt by pipeline/sources/questie.py write_classic_ids; never edited by hand.",
+    ]
+    Path(out).write_bytes(("\n".join(header + [str(i) for i in ids]) + "\n").encode("utf-8"))
+    return len(ids)
+
+
+def note_pruned(result: db.SourceResult, rows: int, objective_sets: int) -> None:
+    """Say what db.prune_source removed, when it removed anything."""
+    if rows or objective_sets:
+        result.notes.append(f"removed {rows} rows and the objectives of {objective_sets} quests that an "
+                            "earlier load wrote and this one no longer has (or has without text)")
 
 
 def write_quest(
@@ -512,7 +558,8 @@ def write_quest(
     trigger_end = row.get(keys["triggerEnd"]) if "triggerEnd" in keys else None
     objectives = build_objectives(
         quest_id, row.get(keys["objectives"]), objectives_text, names, trigger_end, source)
-    if objectives:
-        db.replace_objectives(conn, quest_id, objectives)
-        result.objectives_written += len(objectives)
+    # Even an empty list: it clears what an older load wrote. Rows with db2 amounts stay
+    # (replace_objectives keeps them against any list without db2 amounts).
+    db.replace_objectives(conn, quest_id, objectives)
+    result.objectives_written += len(objectives)
     return True

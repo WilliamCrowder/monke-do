@@ -2,8 +2,9 @@
 
 The validator catches mechanical mistakes; only a person can tell whether the lore is
 faithful and the jokes land kindly. This writes a fixed, seeded sample so two people
-reviewing the same database read the same quests, with Forever-new quests (ids of
-90000 and up) sampled separately because no earlier release has vetted them.
+reviewing the same database read the same quests, with Forever-new quests (the ones Classic
+Questie lacks, most of them 90000 and up) sampled separately because no earlier release has
+vetted them.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+from collections.abc import Collection
 from pathlib import Path
 
 from pipeline import db, rules
@@ -22,20 +24,23 @@ _SOURCE_FIELDS = (("Detail", "detail"), ("Objectives text", "objectives_text"),
 
 
 def pick_ids(
-    conn: sqlite3.Connection, *, n_random: int, n_new: int, seed: int, prompt_version: str
+    conn: sqlite3.Connection, *, n_random: int, n_new: int, seed: int, prompt_version: str,
+    classic_ids: Collection[int] | None = None,
 ) -> list[int]:
     """`n_new` Forever-new quests plus `n_random` from the rest, all with a summary row.
 
+    New means absent from Classic Questie (`classic_ids`, default the committed list).
     Falls back to every quest when nothing has been summarised yet, so the file is
     still useful for eyeballing source text early in a project.
     """
+    classic = classic_ids if classic_ids is not None else db.classic_quest_ids()
     summarised = [r["id"] for r in conn.execute(
         """SELECT q.id FROM quests q JOIN summaries s
            ON s.quest_id = q.id AND s.text_hash = q.text_hash AND s.prompt_version = ?
            ORDER BY q.id""", (prompt_version,))]
     pool = summarised or [r["id"] for r in conn.execute("SELECT id FROM quests ORDER BY id")]
     rng = random.Random(seed)
-    new = [i for i in pool if i >= db.NEW_ID_THRESHOLD]
+    new = [i for i in pool if db.is_new_quest(i, classic)]
     picked_new = rng.sample(new, min(n_new, len(new)))
     taken = set(picked_new)
     rest = [i for i in pool if i not in taken]
@@ -104,10 +109,13 @@ def write_sample(
     n_new: int = 50,
     seed: int = 0,
     prompt_version: str = "v1",
+    classic_ids: Collection[int] | None = None,
 ) -> int:
     """Write the review file and return how many quests it holds. Same seed, same file."""
-    ids = pick_ids(conn, n_random=n_random, n_new=n_new, seed=seed, prompt_version=prompt_version)
-    new = sum(1 for i in ids if i >= db.NEW_ID_THRESHOLD)
+    classic = classic_ids if classic_ids is not None else db.classic_quest_ids()
+    ids = pick_ids(conn, n_random=n_random, n_new=n_new, seed=seed, prompt_version=prompt_version,
+                   classic_ids=classic)
+    new = sum(1 for i in ids if db.is_new_quest(i, classic))
     parts = [
         "# Monke Do review sample\n",
         f"{len(ids)} quests ({new} Forever-new, {len(ids) - new} other), seed {seed}, "

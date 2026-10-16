@@ -1,5 +1,10 @@
 package-as: MonkeDo
 
+# The release notes players see. Without this the packager lists raw commit messages.
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
 # The addon lives in addon/MonkeDo. The packager reads its TOC through this move.
 move-folders:
   MonkeDo/addon/MonkeDo: MonkeDo
